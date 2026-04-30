@@ -7,11 +7,13 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# 1. Define LangGraph State
 class GraphState(TypedDict):
     url: str
     title: str
     channel: str
 
+# 2. Node: Pull YouTube Metadata
 def fetch_metadata_node(state: GraphState):
     url = state["url"]
     print(f"Fetching data for [{url}]...")
@@ -19,7 +21,7 @@ def fetch_metadata_node(state: GraphState):
     ydl_opts = {
         'quiet': True, 
         'skip_download': True,
-        'remote_components': 'ejs:github'
+        'remote_components': ['ejs:github']
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -28,6 +30,7 @@ def fetch_metadata_node(state: GraphState):
         
     return {"title": title, "channel": channel}
 
+# 3. LangGraph Setup
 def build_graph():
     workflow = StateGraph(GraphState)
     workflow.add_node("fetch_metadata", fetch_metadata_node)
@@ -35,6 +38,7 @@ def build_graph():
     workflow.add_edge("fetch_metadata", END)
     return workflow.compile()
 
+# 4.Main function to be triggered from queue
 def process_video(url: str):
     app = build_graph()
     initial_state = {"url": url, "title": "", "channel": ""}
