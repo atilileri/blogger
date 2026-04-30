@@ -4,10 +4,15 @@ This pipeline automatically extracts information from YouTube links sent via Tel
 
 ## Architecture
 
+- **Webhook Gateway:** Cloudflare Tunnels
+- **API & Queue:** FastAPI, Redis, RQ (Redis Queue)
+- **AI Worker:** LangGraph, yt-dlp, Whisper, LLM APIs
+
 ```mermaid
 flowchart TD
     %% External
-    Telegram["Telegram Webhook"]
+    User("You (Telegram App)")
+    TelegramAPI("Telegram API")
 
     %% Service 1: Webhook Exposure
     subgraph LXC_1 ["Service 1: Webhook Exposure LXC"]
@@ -29,18 +34,17 @@ flowchart TD
     end
 
     %% Connections
-    Telegram -->|"Webhook JSON"| Tunnel
-    Tunnel -->|"HTTP POST"| API
+    User -->|"Sends YouTube link"| TelegramAPI
+    TelegramAPI -->|"Webhook JSON Payload"| Tunnel
+    Tunnel -->|"HTTP POST to /webhook"| API
+    API -->|"Sends '✅ Link received!' reply"| TelegramAPI
+    TelegramAPI -->|"Shows message"| User
     API -->|"q.enqueue('worker.process_video', text)"| Redis
     Redis -->|"Polls Queue"| Worker
     Worker -->|"StateGraph execution"| YTDLP
     YTDLP --> Whisper
     Whisper --> LLM
 ```
-
-- **Webhook Gateway:** Cloudflare Tunnels
-- **API & Queue:** FastAPI, Redis, RQ (Redis Queue)
-- **AI Worker:** LangGraph, yt-dlp, Whisper, LLM APIs
 
 ## Prerequisites
 - Proxmox (or similar) environment with LXC/VMs for distributed processing.
@@ -51,20 +55,25 @@ flowchart TD
 
 ## Setup Instructions
 
-1. **Clone the repository:**
+1. **Create Telegram Bot:**
+   - Open Telegram and search for **@BotFather**.
+   - Send `/newbot` and follow the prompts to create your bot.
+   - Save the provided HTTP API Token. This will be your `TELEGRAM_BOT_TOKEN`.
+
+2. **Clone the repository:**
    ```bash
    git clone https://github.com/your-username/blogger.git
    cd blogger
    ```
 
-2. **Set up the virtual environment:**
+3. **Set up the virtual environment:**
    ```bash
    python3 -m venv venv
    source venv/bin/activate
    pip install -r requirements.txt
    ```
 
-3. **Environment Variables:**
+4. **Environment Variables:**
    Copy the example environment file and fill in your secrets.
    ```bash
    cp .env.example .env
@@ -81,7 +90,14 @@ To allow Telegram to reach your local API server, you need to expose port 8000 t
 cloudflared tunnel --url http://<API_SERVER_IP>:8000
 ```
 
-*Note: This creates a temporary URL that changes every time you restart the tunnel. You will see an output like `https://random-words.trycloudflare.com`.* You must use this generated URL to configure your Telegram Webhook.
+*Note: This creates a temporary URL that changes every time you restart the tunnel. You will see an output like `https://random-words.trycloudflare.com`.*
+
+**Set the Telegram Webhook:**
+Once you have your Cloudflare Tunnel URL, you must tell Telegram to send updates to it. Open your browser and visit the following URL (replace `<YOUR_BOT_TOKEN>` with your token from BotFather, and `<YOUR_TUNNEL_URL>` with the Cloudflare URL, e.g., `https://random-words.trycloudflare.com/webhook`):
+```text
+https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_TUNNEL_URL>/webhook
+```
+You should see a JSON response: `{"ok":true,"result":true,"description":"Webhook was set"}`.
 
 ### 2. API Server
 Run the FastAPI application in the background to listen for Telegram webhooks. Here, `uvicorn api:app` tells the server to look inside the `api.py` file and serve the FastAPI instance named `app`. The `nohup` command ensures the server keeps running even if you disconnect from your terminal session, while routing all logs to `nohup.out`:
