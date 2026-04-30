@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+redis
+rq
+requests
+python-dotenv
+yt-dlp
+langgraph
+langchain-core
