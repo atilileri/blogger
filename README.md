@@ -4,17 +4,38 @@ This pipeline automatically extracts information from YouTube links sent via Tel
 
 ## Architecture
 
-![Pipeline Architecture](pipeline_architecture.png)
-
 ```mermaid
-graph LR
-    User[Telegram] -->|Webhook| Tunnel[Cloudflare Tunnel]
-    Tunnel -->|Forward HTTP| API[FastAPI Server]
-    API -->|Enqueue Job| Redis[(Redis Queue)]
-    Redis -->|Poll| Worker[RQ Worker]
-    Worker -->|1. Metadata| YTDLP[yt-dlp]
-    Worker -->|2. Transcribe| Whisper[Whisper]
-    Worker -->|3. Generate| LLM[LangGraph / LLM]
+flowchart TD
+    %% External
+    Telegram["Telegram Webhook"]
+
+    %% Service 1: Webhook Exposure
+    subgraph LXC_1 ["Service 1: Webhook Exposure LXC"]
+        Tunnel["Cloudflare Tunnel<br/>cloudflared tunnel --url http://<API_SERVER_IP>:8000"]
+    end
+
+    %% Service 2: API & Redis
+    subgraph LXC_2 ["Service 2: API Server LXC<br/>IP: <API_SERVER_IP>"]
+        API["FastAPI App<br/>nohup uvicorn api:app --host 0.0.0.0 --port 8000"]
+        Redis[("Redis Database<br/>port: 6379")]
+    end
+
+    %% Service 3: RQ Worker
+    subgraph LXC_3 ["Service 3: AI Worker LXC"]
+        Worker["RQ Worker<br/>rq worker video_tasks --url redis://<API_SERVER_IP>:6379<br/>Entry: worker.process_video"]
+        YTDLP["yt-dlp Node<br/>extract_info(url, download=False)"]
+        Whisper["Whisper Node<br/>transcription"]
+        LLM["LangGraph Node<br/>LLM Generation"]
+    end
+
+    %% Connections
+    Telegram -->|"Webhook JSON"| Tunnel
+    Tunnel -->|"HTTP POST"| API
+    API -->|"q.enqueue('worker.process_video', text)"| Redis
+    Redis -->|"Polls Queue"| Worker
+    Worker -->|"StateGraph execution"| YTDLP
+    YTDLP --> Whisper
+    Whisper --> LLM
 ```
 
 - **Webhook Gateway:** Cloudflare Tunnels
