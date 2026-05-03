@@ -3,6 +3,7 @@ LangGraph AI Worker for the Blogger pipeline.
 Processes queued YouTube links, extracts metadata, and executes AI generation steps.
 """
 import os
+import requests
 import yt_dlp
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
@@ -48,7 +49,7 @@ def build_graph():
     return workflow.compile()
 
 # 4.Main function to be triggered from queue
-def process_video(url: str):
+def process_video(url: str, chat_id: int = None):
     app = build_graph()
     initial_state = {"url": url, "title": "", "channel": ""}
     
@@ -59,4 +60,17 @@ def process_video(url: str):
     print(f"Channel: {result['channel']}")
     print(f"Title: {result['title']}")
     print("="*40 + "\n")
+
+    if chat_id:
+        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if telegram_token:
+            telegram_api_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+            message_text = f"✅ Analysis Completed!\n\n📺 Title: {result['title']}\n👤 Channel: {result['channel']}"
+            try:
+                requests.post(telegram_api_url, json={
+                    "chat_id": chat_id,
+                    "text": message_text
+                })
+            except Exception as e:
+                print(f"Failed to send completion message to Telegram: {e}")
     return result

@@ -49,7 +49,7 @@ async def telegram_webhook(request: Request):
                 })
 
                 # Enqueue the task for LXC 3 (Worker)
-                job = q.enqueue('worker.process_video', text)
+                job = q.enqueue('worker.process_video', text, chat_id)
                 logger.info(f"Job successfully enqueued with ID: {job.id}")
 
                 return {"status": "Queued", "job_id": job.id}
