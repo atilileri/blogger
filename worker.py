@@ -28,9 +28,14 @@ def fetch_metadata_node(state: GraphState):
         'remote_components': ['ejs:github']
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        title = info.get('title', 'Unknown Title')
-        channel = info.get('uploader', 'Unknown Channel')
+        try:
+            info = ydl.extract_info(url, download=False)
+            title = info.get('title', 'Unknown Title')
+            channel = info.get('uploader', 'Unknown Channel')
+        except yt_dlp.utils.DownloadError as e:
+            print(f"Failed to fetch metadata: {e}")
+            title = "Metadata Fetch Error"
+            channel = "Unknown Channel"
         
     return {"title": title, "channel": channel}
 

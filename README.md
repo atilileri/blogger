@@ -102,6 +102,7 @@ flowchart TD
 ## Running the Services
 
 > **Note:** This architecture is designed so that these 3 services (Ngrok Tunnel, API Server + Redis, RQ Worker) can run on **separate machines/containers** for distributed processing (e.g. LXC nodes). Since Service 1 (Tunnel) and Service 3 (Worker) both connect to Service 2 (API Server), they must use the API Server's IP address in their configuration. If you are running everything on a single machine, you can simply use `localhost` or `127.0.0.1`.
+
 **Note:** All services depend on the environment variables defined in `.env`. Ensure you have completed the [Setup Instructions](#setup-instructions) before starting them.
 
 ### 1. Ngrok Tunnel (Webhook Exposure)
@@ -157,6 +158,12 @@ systemctl enable --now ngrok
 systemctl status ngrok
 ```
 *(Ensure it shows `active (running)`).*
+
+Use 
+```
+journalctl -fu ngrok.service
+```
+to watch live logs.
 
 **1.4. Set the Telegram Webhook**
 Notify Telegram of your webhook address by executing:
