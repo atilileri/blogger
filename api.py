@@ -39,7 +39,15 @@ async def telegram_webhook(request: Request):
             chat_id = data["message"]["chat"]["id"]
             text = data["message"]["text"]
 
-            # Simple validation for YouTube links
+            # todo : message can contain more than one url. also some other texts as well.
+            # intelligent extraction will be required. maybe some agent can do it.
+            # It might be better to send message as it is to the worker and make it do the heavy lifting.
+            # here API should just be a relay, and let the worker do all the logic.
+
+            # todo : there will be all kinds of messages, not only youtube in the future.
+            # Send link received here. and do validations after. Send validation results as well.
+
+            # Simple validation for YouTube links (todo - move to worker as well)
             if "youtube.com" in text or "youtu.be" in text:
 
                 # Send immediate feedback to user
@@ -49,12 +57,12 @@ async def telegram_webhook(request: Request):
                 })
 
                 # Enqueue the task for LXC 3 (Worker)
-                job = q.enqueue('worker.process_video', text, chat_id)
+                job = q.enqueue('worker.process_video', text, chat_id) # todo : not process video, but process message
                 logger.info(f"Job successfully enqueued with ID: {job.id}")
 
                 return {"status": "Queued", "job_id": job.id}
 
-        return {"status": "Ignored", "reason": "Not a valid youtube link or text message"}
+        return {"status": "Ignored", "reason": "Not a valid youtube link or text message"} # todo : we should not decide and just relay whatever comes from worker
 
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
