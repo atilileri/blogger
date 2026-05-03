@@ -1,3 +1,7 @@
+"""
+LangGraph AI Worker for the Blogger pipeline.
+Processes queued YouTube links, extracts metadata, and executes AI generation steps.
+"""
 import os
 import yt_dlp
 from typing import TypedDict

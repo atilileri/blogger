@@ -1,3 +1,7 @@
+"""
+FastAPI server for the Blogger pipeline.
+Receives Telegram webhooks, validates YouTube links, and enqueues tasks to Redis.
+"""
 import logging
 import os
 from fastapi import FastAPI, Request
