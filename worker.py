@@ -17,6 +17,7 @@ class GraphState(TypedDict):
     url: str
     title: str
     channel: str
+    error: str
 
 # 2. Node: Pull YouTube Metadata
 def fetch_metadata_node(state: GraphState):
@@ -33,12 +34,14 @@ def fetch_metadata_node(state: GraphState):
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'Unknown Title')
             channel = info.get('uploader', 'Unknown Channel')
-        except yt_dlp.utils.DownloadError as e:
+            error = ""
+        except Exception as e:
             print(f"Failed to fetch metadata: {e}")
-            title = "Metadata Fetch Error"
-            channel = "Unknown Channel"
+            title = ""
+            channel = ""
+            error = str(e)
         
-    return {"title": title, "channel": channel}
+    return {"title": title, "channel": channel, "error": error}
 
 # 3. LangGraph Setup
 def build_graph():
@@ -51,7 +54,7 @@ def build_graph():
 # 4.Main function to be triggered from queue
 def process_video(url: str, chat_id: int = None):
     app = build_graph()
-    initial_state = {"url": url, "title": "", "channel": ""}
+    initial_state = {"url": url, "title": "", "channel": "", "error": ""}
     
     result = app.invoke(initial_state)
     
@@ -65,7 +68,10 @@ def process_video(url: str, chat_id: int = None):
         telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
         if telegram_token:
             telegram_api_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-            message_text = f"✅ Analysis Completed!\n\n📺 Title: {result['title']}\n👤 Channel: {result['channel']}"
+            if result.get('error'):
+                message_text = f"❌ Analysis Failed!\n\nError: {result['error']}"
+            else:
+                message_text = f"✅ Analysis Completed!\n\n📺 Title: {result['title']}\n👤 Channel: {result['channel']}"
             try:
                 requests.post(telegram_api_url, json={
                     "chat_id": chat_id,
