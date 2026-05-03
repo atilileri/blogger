@@ -77,14 +77,7 @@ flowchart TD
    cd blogger
    ```
 
-3. **Set up the virtual environment:**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-4. **Environment Variables:**
+3. **Environment Variables:**
    Copy the example environment file and fill in your secrets.
    ```bash
    cp .env.example .env
@@ -97,6 +90,14 @@ flowchart TD
    - `REDIS_PORT`: The port Redis is running on (default `6379`).
    - `NGROK_AUTH_TOKEN`: Your ngrok authentication token.
    - `STATIC_DOMAIN`: Your ngrok static domain (e.g., `upward-marmot.ngrok-free.app`).
+
+4. **Set up the virtual environment (API & Worker Nodes Only):**
+   If you are running the API Server or RQ Worker, you need to install the Python dependencies. The Ngrok tunnel does **not** require this step.
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
 ## Running the Services
 
