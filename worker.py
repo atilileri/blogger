@@ -58,14 +58,12 @@ def process_video(url: str, chat_id: int = None):
     
     result = app.invoke(initial_state)
     
-    # todo : check if no error. this is too early to log celebrations
     print("\n" + "="*40)
     print("🚀 TASK COMPLETED!")
     print(f"Channel: {result['channel']}")
     print(f"Title: {result['title']}")
     print("="*40 + "\n")
 
-    # todo : there must always be a chat_id. validate this.
     if chat_id:
         telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
         if telegram_token:
