@@ -10,3 +10,12 @@ env/
 
 # Logs
 *.log
+nohup.out
+
+# Checkpoints
+*.sqlite
+*.sqlite-journal
+
+# Media artifacts
+media/
+static/

@@ -1,0 +1,15 @@
+langgraph
+langgraph-checkpoint-sqlite
+langchain-core
+langchain-google-genai
+yt-dlp
+faster-whisper
+trafilatura
+beautifulsoup4
+duckduckgo-search
+python-frontmatter
+gitpython
+httpx
+redis
+rq
+python-dotenv
