@@ -7,12 +7,16 @@ from utils.state import PipelineState
 from utils.telegram import send_inline_keyboard, send_message
 
 logger = logging.getLogger(__name__)
-
 async def reference_node(state: PipelineState):
     """
     Step 4: Extracts key references and waits for user approval (HitL).
     """
-    logger.info(f"[NODE:reference] Generating references for {state['chat_id']}")
+    chat_id = state.get("chat_id")
+    if not chat_id:
+        logger.error("[NODE:reference] Missing chat_id in state.")
+        return {"status": "error", "error": "Missing chat_id"}
+
+    logger.info(f"[NODE:reference] Generating references for {chat_id}")
     
     # 1. Generate References via Gemini
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
@@ -54,7 +58,7 @@ async def reference_node(state: PipelineState):
     ]
     
     await send_inline_keyboard(
-        state["chat_id"],
+        chat_id,
         f"🔍 **Step 1: References & Concepts**\n\n{refs_text}\n\nShould I proceed with these?",
         buttons
     )
@@ -66,23 +70,23 @@ async def reference_node(state: PipelineState):
     
     # 4. Process Decision
     if decision == "approve":
-        logger.info(f"[NODE:reference] Approved by {state['chat_id']}")
+        logger.info(f"[NODE:reference] Approved by {chat_id}")
         return {
             "reference_decision": "approve",
             "references": {"raw": refs_text}
         }
     
     if decision == "cancel":
-        logger.info(f"[NODE:reference] Cancelled by {state['chat_id']}")
-        await send_message(state["chat_id"], "⏹️ Pipeline cancelled.")
+        logger.info(f"[NODE:reference] Cancelled by {chat_id}")
+        await send_message(chat_id, "⏹️ Pipeline cancelled.")
         return {"reference_decision": "cancel"}
-
+    
     # Revision handling
     # decision will be {"action": "revise", "text": "..."}
     revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
     if not revision_text:
         # User clicked 'Revise' button but hasn't sent text yet
-        await send_message(state["chat_id"], "✍️ Please send your revision instructions as a text message.")
+        await send_message(chat_id, "✍️ Please send your revision instructions as a text message.")
         # Re-interrupt to wait specifically for the text message
         decision = interrupt("reference_revision_text_required")
         revision_text = decision.get("text", "") if isinstance(decision, dict) else ""

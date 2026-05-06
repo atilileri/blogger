@@ -8,16 +8,20 @@ from utils.telegram import send_inline_keyboard, send_message
 from tavily import TavilyClient
 
 logger = logging.getLogger(__name__)
-
 async def research_node(state: PipelineState):
     """
     Step 5: Performs web research based on approved references and waits for HitL approval.
     """
-    logger.info(f"[NODE:research] Starting research for {state['chat_id']}")
+    chat_id = state.get("chat_id")
+    if not chat_id:
+        logger.error("[NODE:research] Missing chat_id in state.")
+        return {"status": "error", "error": "Missing chat_id"}
+
+    logger.info(f"[NODE:research] Starting research for {chat_id}")
     
     # 1. Generate search queries based on references and user intent
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-    refs = state.get("references", {}).get("raw", "")
+    refs = (state.get("references") or {}).get("raw", "")
     
     query_prompt = (
         f"Based on the following references and user intent, generate 3 high-quality web search queries "
@@ -28,7 +32,12 @@ async def research_node(state: PipelineState):
     )
     
     resp = await llm.ainvoke([SystemMessage(content="Generate research queries."), HumanMessage(content=query_prompt)])
-    queries = [q.strip("- ").strip() for q in resp.content.split("\n") if q.strip()][:3]
+    # Filter out empty lines and markdown code block artifacts
+    queries = [
+        q.strip("- ").strip() 
+        for q in resp.content.split("\n") 
+        if q.strip() and not q.strip().startswith("```")
+    ][:3]
     
     # 2. Execute Search via Tavily
     tavily_key = os.getenv("TAVILY_API_KEY")
@@ -61,7 +70,7 @@ async def research_node(state: PipelineState):
     ]
     
     await send_inline_keyboard(
-        state["chat_id"],
+        chat_id,
         f"🌐 **Step 2: Web Research Findings**\n\n{research_text}\n\nShould I use these as extra context?",
         buttons
     )
@@ -70,21 +79,21 @@ async def research_node(state: PipelineState):
     
     # 4. Process Decision
     if decision == "approve":
-        logger.info(f"[NODE:research] Approved by {state['chat_id']}")
+        logger.info(f"[NODE:research] Approved by {chat_id}")
         return {
             "research_decision": "approve",
             "research_snippets": snippets
         }
     
     if decision == "cancel":
-        logger.info(f"[NODE:research] Cancelled by {state['chat_id']}")
-        await send_message(state["chat_id"], "⏹️ Pipeline cancelled.")
+        logger.info(f"[NODE:research] Cancelled by {chat_id}")
+        await send_message(chat_id, "⏹️ Pipeline cancelled.")
         return {"research_decision": "cancel"}
-
+    
     # Revision
     revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
     if not revision_text:
-        await send_message(state["chat_id"], "✍️ Please send your research revision instructions.")
+        await send_message(chat_id, "✍️ Please send your research revision instructions.")
         decision = interrupt("research_revision_text_required")
         revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
 
