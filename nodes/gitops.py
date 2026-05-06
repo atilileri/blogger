@@ -12,7 +12,7 @@ from utils.telegram import send_message
 logger = logging.getLogger(__name__)
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-async def create_atomic_commit(client, token, repo, files, message, branch="main"):
+def create_atomic_commit(client, token, repo, files, message, branch="main"):
     """
     Pushes multiple files to GitHub in a single atomic commit via the Git Data API.
     """
@@ -23,13 +23,13 @@ async def create_atomic_commit(client, token, repo, files, message, branch="main
     
     # 1. Get branch ref
     ref_url = f"https://api.github.com/repos/{repo}/git/refs/heads/{branch}"
-    ref_resp = await client.get(ref_url, headers=headers)
+    ref_resp = client.get(ref_url, headers=headers)
     ref_resp.raise_for_status()
     latest_commit_sha = ref_resp.json()["object"]["sha"]
     
     # 2. Get base tree
     commit_url = f"https://api.github.com/repos/{repo}/git/commits/{latest_commit_sha}"
-    commit_resp = await client.get(commit_url, headers=headers)
+    commit_resp = client.get(commit_url, headers=headers)
     commit_resp.raise_for_status()
     base_tree_sha = commit_resp.json()["tree"]["sha"]
     
@@ -41,7 +41,7 @@ async def create_atomic_commit(client, token, repo, files, message, branch="main
             "content": base64.b64encode(f["content"]).decode() if f["is_binary"] else f["content"],
             "encoding": "base64" if f["is_binary"] else "utf-8"
         }
-        blob_resp = await client.post(blob_url, headers=headers, json=blob_payload)
+        blob_resp = client.post(blob_url, headers=headers, json=blob_payload)
         blob_resp.raise_for_status()
         
         tree_items.append({
@@ -57,7 +57,7 @@ async def create_atomic_commit(client, token, repo, files, message, branch="main
         "base_tree": base_tree_sha,
         "tree": tree_items
     }
-    tree_resp = await client.post(tree_url, headers=headers, json=tree_payload)
+    tree_resp = client.post(tree_url, headers=headers, json=tree_payload)
     tree_resp.raise_for_status()
     
     # 5. Create Commit
@@ -67,16 +67,16 @@ async def create_atomic_commit(client, token, repo, files, message, branch="main
         "tree": tree_resp.json()["sha"],
         "parents": [latest_commit_sha]
     }
-    new_commit_resp = await client.post(new_commit_url, headers=headers, json=new_commit_payload)
+    new_commit_resp = client.post(new_commit_url, headers=headers, json=new_commit_payload)
     new_commit_resp.raise_for_status()
     
     # 6. Update Ref
     update_ref_payload = {"sha": new_commit_resp.json()["sha"]}
-    update_resp = await client.patch(ref_url, headers=headers, json=update_ref_payload)
+    update_resp = client.patch(ref_url, headers=headers, json=update_ref_payload)
     update_resp.raise_for_status()
     return True
 
-async def gitops_node(state: PipelineState):
+def gitops_node(state: PipelineState):
     """
     Step 8: Formats blog posts and pushes them to GitHub along with the hero image.
     """
@@ -97,7 +97,7 @@ async def gitops_node(state: PipelineState):
     if not all([token, repo]):
         error_msg = "❌ GITHUB_TOKEN or GITHUB_REPO missing. Cannot publish."
         logger.error(error_msg)
-        await send_message(chat_id, error_msg)
+        send_message(chat_id, error_msg)
         return {"status": "error", "error": "Missing credentials"}
 
     # 2. Prepare Metadata
@@ -107,7 +107,7 @@ async def gitops_node(state: PipelineState):
     if not blog_en or not blog_tr:
         error_msg = "❌ Missing blog content in state. Cannot publish."
         logger.error(error_msg)
-        await send_message(chat_id, error_msg)
+        send_message(chat_id, error_msg)
         return {"status": "error", "error": "Missing blog content"}
 
     pub_date = datetime.now().strftime("%Y-%m-%d")
@@ -118,7 +118,7 @@ async def gitops_node(state: PipelineState):
     slug_tr = f"{slug_en}-tr"
     
     # 3. Consolidate HTTPX Client and Handle Hero Image
-    async with httpx.AsyncClient() as client:
+    with httpx.Client() as client:
         # Handle Image
         image_info = state.get("generated_images", [{}])[0]
         image_url = image_info.get("url")
@@ -127,7 +127,7 @@ async def gitops_node(state: PipelineState):
         
         if image_url:
             try:
-                img_resp = await client.get(image_url, timeout=30)
+                img_resp = client.get(image_url, timeout=30)
                 img_resp.raise_for_status()
                 img_content = img_resp.content
             except Exception as e:
@@ -179,7 +179,7 @@ translationId: "{trans_id}"
         })
 
         try:
-            success = await create_atomic_commit(
+            success = create_atomic_commit(
                 client,
                 token,
                 repo,
@@ -193,9 +193,9 @@ translationId: "{trans_id}"
 
     if success:
         commit_url = f"https://github.com/{repo}/commits/{branch}"
-        await send_message(chat_id, f"🚀 **Success!** Blog posts published to GitHub.\n\n[View Repository]({commit_url})")
+        send_message(chat_id, f"🚀 **Success!** Blog posts published to GitHub.\n\n[View Repository]({commit_url})")
         return {"status": "completed", "commit_url": commit_url}
     else:
-        await send_message(chat_id, "⚠️ Partial success or failure while pushing to GitHub. Check logs.")
+        send_message(chat_id, "⚠️ Partial success or failure while pushing to GitHub. Check logs.")
         return {"status": "partial_success"}
 

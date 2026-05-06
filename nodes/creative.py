@@ -8,7 +8,7 @@ from utils.telegram import send_inline_keyboard, send_message
 
 logger = logging.getLogger(__name__)
 
-async def creative_node(state: PipelineState):
+def creative_node(state: PipelineState):
     """
     Step 6: Generates storylines, waits for selection (HitL), 
     then generates full EN and TR blog content.
@@ -31,7 +31,7 @@ async def creative_node(state: PipelineState):
         "Storyline 3: [Title] - [Summary]\n"
     )
 
-    resp = await llm.ainvoke([SystemMessage(content="Generate 3 diverse blog storylines."), HumanMessage(content=storyline_prompt)])
+    resp = llm.invoke([SystemMessage(content="Generate 3 diverse blog storylines."), HumanMessage(content=storyline_prompt)])
     storylines_raw = resp.content
     storylines_list = [s.strip() for s in storylines_raw.split("---") if s.strip()]
 
@@ -43,7 +43,7 @@ async def creative_node(state: PipelineState):
     buttons.append(row)
     buttons.append([{"text": "❌ Cancel", "callback_data": "cancel"}])
 
-    await send_inline_keyboard(
+    send_inline_keyboard(
         state["chat_id"],
         f"🎭 **Step 3: Choose a Storyline**\n\n{storylines_raw}\n\nWhich angle should we take?",
         buttons
@@ -52,7 +52,7 @@ async def creative_node(state: PipelineState):
     selection = interrupt("storyline_selection_required")
     
     if selection == "cancel":
-        await send_message(state["chat_id"], "⏹️ Pipeline cancelled.")
+        send_message(state["chat_id"], "⏹️ Pipeline cancelled.")
         return {"status": "cancelled"}
 
     try:
@@ -60,11 +60,11 @@ async def creative_node(state: PipelineState):
         chosen_storyline = storylines_list[idx]
     except (ValueError, IndexError):
         logger.error(f"[CREATIVE] Invalid selection: {selection}")
-        await send_message(state["chat_id"], "⚠️ Invalid selection. Please try starting over.")
+        send_message(state["chat_id"], "⚠️ Invalid selection. Please try starting over.")
         return {"status": "error"}
 
     logger.info(f"[NODE:creative] Storyline {idx+1} selected. Generating full posts...")
-    await send_message(state["chat_id"], f"✍️ Storyline {idx+1} selected! Generating full English and Turkish posts... This may take a minute.")
+    send_message(state["chat_id"], f"✍️ Storyline {idx+1} selected! Generating full English and Turkish posts... This may take a minute.")
 
     # 3. Generate EN and TR Posts
     # Prompt for EN
@@ -74,7 +74,7 @@ async def creative_node(state: PipelineState):
         "Output as JSON with keys: title, description, tags (list), content (markdown)."
     )
     
-    en_resp = await llm.ainvoke([
+    en_resp = llm.invoke([
         SystemMessage(content="You are an expert blogger. Output strictly JSON."), 
         HumanMessage(content=en_prompt)
     ])
@@ -87,7 +87,7 @@ async def creative_node(state: PipelineState):
         "Output as JSON with keys: title, description, tags (list), content (markdown)."
     )
     
-    tr_resp = await llm.ainvoke([
+    tr_resp = llm.invoke([
         SystemMessage(content="You are an expert translator and blogger. Output strictly JSON."), 
         HumanMessage(content=tr_prompt)
     ])
@@ -110,5 +110,5 @@ async def creative_node(state: PipelineState):
         }
     except Exception as e:
         logger.error(f"[CREATIVE] JSON parsing failed: {e}")
-        await send_message(state["chat_id"], "❌ Failed to generate structured content. Please try /cancel and restart.")
+        send_message(state["chat_id"], "❌ Failed to generate structured content. Please try /cancel and restart.")
         return {"status": "error"}

@@ -7,7 +7,7 @@ from utils.state import PipelineState
 
 logger = logging.getLogger(__name__)
 
-async def visual_node(state: PipelineState):
+def visual_node(state: PipelineState):
     """
     Step 7: Generates a hero image using Pollinations.ai.
     """
@@ -24,7 +24,7 @@ async def visual_node(state: PipelineState):
         "Output ONLY the prompt text, no headers or quotes."
     )
     
-    resp = await llm.ainvoke([SystemMessage(content="You are an image prompt engineer."), HumanMessage(content=prompt_gen)])
+    resp = llm.invoke([SystemMessage(content="You are an image prompt engineer."), HumanMessage(content=prompt_gen)])
     image_prompt = resp.content.strip().replace("\n", " ").replace('"', "")
     
     # 2. Build URL (Pollinations handles the generation on-the-fly)

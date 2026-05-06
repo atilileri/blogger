@@ -7,7 +7,7 @@ from utils.state import PipelineState
 from utils.telegram import send_inline_keyboard, send_message
 
 logger = logging.getLogger(__name__)
-async def reference_node(state: PipelineState):
+def reference_node(state: PipelineState):
     """
     Step 4: Extracts key references and waits for user approval (HitL).
     """
@@ -43,7 +43,7 @@ async def reference_node(state: PipelineState):
         f"CONTEXT:\n{context[:10000]}" # Truncate if too long for flash
     )
 
-    resp = await llm.ainvoke([SystemMessage(content="Extract structured references for a blog post."), HumanMessage(content=prompt)])
+    resp = llm.invoke([SystemMessage(content="Extract structured references for a blog post."), HumanMessage(content=prompt)])
     refs_text = resp.content
 
     # 2. Presentation & Interruption
@@ -57,7 +57,7 @@ async def reference_node(state: PipelineState):
         ]
     ]
     
-    await send_inline_keyboard(
+    send_inline_keyboard(
         chat_id,
         f"🔍 **Step 1: References & Concepts**\n\n{refs_text}\n\nShould I proceed with these?",
         buttons
@@ -78,7 +78,7 @@ async def reference_node(state: PipelineState):
     
     if decision == "cancel":
         logger.info(f"[NODE:reference] Cancelled by {chat_id}")
-        await send_message(chat_id, "⏹️ Pipeline cancelled.")
+        send_message(chat_id, "⏹️ Pipeline cancelled.")
         return {"reference_decision": "cancel"}
     
     # Revision handling
@@ -86,7 +86,7 @@ async def reference_node(state: PipelineState):
     revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
     if not revision_text:
         # User clicked 'Revise' button but hasn't sent text yet
-        await send_message(chat_id, "✍️ Please send your revision instructions as a text message.")
+        send_message(chat_id, "✍️ Please send your revision instructions as a text message.")
         # Re-interrupt to wait specifically for the text message
         decision = interrupt("reference_revision_text_required")
         revision_text = decision.get("text", "") if isinstance(decision, dict) else ""

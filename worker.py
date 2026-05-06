@@ -57,7 +57,7 @@ def build_graph(checkpointer):
     workflow.add_node("gitops", gitops_node)
 
     # Node that gathers all parallel results
-    async def gather_node(state: PipelineState):
+    def gather_node(state: PipelineState):
         logger.info(f"[NODE:gather] Collected results. Moving to Reference Agent.")
         return {"status": "processing_completed"}
 
@@ -164,7 +164,7 @@ def resume_pipeline(callback_query: dict):
     logger.info(f"[WORKER] resume_pipeline: chat_id={chat_id} decision={decision}")
 
     # Answer the callback query to remove Telegram's loading spinner
-    asyncio.run(answer_callback_query(callback_id))
+    answer_callback_query(callback_id)
 
     try:
         with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:

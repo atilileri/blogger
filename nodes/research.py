@@ -8,7 +8,7 @@ from utils.telegram import send_inline_keyboard, send_message
 from tavily import TavilyClient
 
 logger = logging.getLogger(__name__)
-async def research_node(state: PipelineState):
+def research_node(state: PipelineState):
     """
     Step 5: Performs web research based on approved references and waits for HitL approval.
     """
@@ -31,7 +31,7 @@ async def research_node(state: PipelineState):
         "Output only the queries, one per line."
     )
     
-    resp = await llm.ainvoke([SystemMessage(content="Generate research queries."), HumanMessage(content=query_prompt)])
+    resp = llm.invoke([SystemMessage(content="Generate research queries."), HumanMessage(content=query_prompt)])
     # Filter out empty lines and markdown code block artifacts
     queries = [
         q.strip("- ").strip() 
@@ -69,7 +69,7 @@ async def research_node(state: PipelineState):
         ]
     ]
     
-    await send_inline_keyboard(
+    send_inline_keyboard(
         chat_id,
         f"🌐 **Step 2: Web Research Findings**\n\n{research_text}\n\nShould I use these as extra context?",
         buttons
@@ -87,13 +87,13 @@ async def research_node(state: PipelineState):
     
     if decision == "cancel":
         logger.info(f"[NODE:research] Cancelled by {chat_id}")
-        await send_message(chat_id, "⏹️ Pipeline cancelled.")
+        send_message(chat_id, "⏹️ Pipeline cancelled.")
         return {"research_decision": "cancel"}
     
     # Revision
     revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
     if not revision_text:
-        await send_message(chat_id, "✍️ Please send your research revision instructions.")
+        send_message(chat_id, "✍️ Please send your research revision instructions.")
         decision = interrupt("research_revision_text_required")
         revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
 
