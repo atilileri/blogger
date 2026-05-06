@@ -148,7 +148,7 @@ def run_pipeline(message: dict):
     }
 
     try:
-        app.invoke(initial_state, config=config)
+        asyncio.run(app.ainvoke(initial_state, config=config))
     except Exception as e:
         logger.error(f"[WORKER] Error in run_pipeline: {e}")
 
@@ -171,7 +171,7 @@ def resume_pipeline(callback_query: dict):
 
     try:
         # Command(resume=...) sends the value back to the specific interrupt() call
-        app.invoke(Command(resume=decision), config=config)
+        asyncio.run(app.ainvoke(Command(resume=decision), config=config))
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_pipeline: {e}")
 
@@ -190,6 +190,6 @@ def resume_with_text(message: dict):
 
     try:
         # Send a dictionary payload that the node's interrupt handler will parse
-        app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
+        asyncio.run(app.ainvoke(Command(resume={"action": "revise", "text": text}), config=config))
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_with_text: {e}")

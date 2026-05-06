@@ -3,7 +3,9 @@ import logging
 import httpx
 import base64
 import uuid
+import re
 from datetime import datetime
+from tenacity import retry, stop_after_attempt, wait_exponential
 from utils.state import PipelineState
 from utils.telegram import send_message
 
@@ -34,7 +36,7 @@ async def gitops_node(state: PipelineState):
     blog_en = state["blog_json_en"]
     blog_tr = state["blog_json_tr"]
     
-    slug_en = blog_en["title"].lower().replace(" ", "-").replace("?", "").replace("!", "")[:50]
+    slug_en = re.sub(r'[^a-z0-9]+', '-', blog_en["title"].lower()).strip('-')[:50]
     slug_tr = f"{slug_en}-tr"
     
     # 3. Handle Hero Image
@@ -72,48 +74,97 @@ translationId: "{trans_id}"
     post_en_body = format_post(blog_en, "en", hero_img_web_path)
     post_tr_body = format_post(blog_tr, "tr", hero_img_web_path)
 
-    # 5. Push to GitHub via API
-    # We use a single commit with multiple files if possible, or sequential. 
-    # For simplicity, sequential PUT requests to the Contents API.
-    
-    async def push_file(path, content, is_binary=False):
-        url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    # 5. Push to GitHub via Git Data API (Atomic Commit)
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def create_atomic_commit(client, files, message, branch="main"):
         headers = {
             "Authorization": f"token {token}",
             "Accept": "application/vnd.github.v3+json"
         }
         
-        # Get SHA if file exists (to update)
-        sha = None
-        get_resp = await client.get(url, headers=headers)
-        if get_resp.status_code == 200:
-            sha = get_resp.json()["sha"]
+        # 1. Get branch ref
+        ref_url = f"https://api.github.com/repos/{repo}/git/refs/heads/{branch}"
+        ref_resp = await client.get(ref_url, headers=headers)
+        ref_resp.raise_for_status()
+        latest_commit_sha = ref_resp.json()["object"]["sha"]
         
-        payload = {
-            "message": f"Blogger AI: Publish {path}",
-            "content": base64.b64encode(content if is_binary else content.encode()).decode(),
-            "branch": "main" # or config
-        }
-        if sha:
-            payload["sha"] = sha
+        # 2. Get base tree
+        commit_url = f"https://api.github.com/repos/{repo}/git/commits/{latest_commit_sha}"
+        commit_resp = await client.get(commit_url, headers=headers)
+        commit_resp.raise_for_status()
+        base_tree_sha = commit_resp.json()["tree"]["sha"]
+        
+        # 3. Create blobs and tree array
+        tree_items = []
+        for f in files:
+            blob_url = f"https://api.github.com/repos/{repo}/git/blobs"
+            blob_payload = {
+                "content": base64.b64encode(f["content"]).decode() if f["is_binary"] else f["content"],
+                "encoding": "base64" if f["is_binary"] else "utf-8"
+            }
+            blob_resp = await client.post(blob_url, headers=headers, json=blob_payload)
+            blob_resp.raise_for_status()
             
-        put_resp = await client.put(url, headers=headers, json=payload)
-        return put_resp.status_code in [200, 201]
+            tree_items.append({
+                "path": f["path"],
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob_resp.json()["sha"]
+            })
+            
+        # 4. Create Tree
+        tree_url = f"https://api.github.com/repos/{repo}/git/trees"
+        tree_payload = {
+            "base_tree": base_tree_sha,
+            "tree": tree_items
+        }
+        tree_resp = await client.post(tree_url, headers=headers, json=tree_payload)
+        tree_resp.raise_for_status()
+        
+        # 5. Create Commit
+        new_commit_url = f"https://api.github.com/repos/{repo}/git/commits"
+        new_commit_payload = {
+            "message": message,
+            "tree": tree_resp.json()["sha"],
+            "parents": [latest_commit_sha]
+        }
+        new_commit_resp = await client.post(new_commit_url, headers=headers, json=new_commit_payload)
+        new_commit_resp.raise_for_status()
+        
+        # 6. Update Ref
+        update_ref_payload = {"sha": new_commit_resp.json()["sha"]}
+        update_resp = await client.patch(ref_url, headers=headers, json=update_ref_payload)
+        update_resp.raise_for_status()
+        return True
 
     async with httpx.AsyncClient() as client:
-        success = True
-        # Upload Image
+        files_to_commit = []
         if img_content:
-            img_success = await push_file(f"{images_path}/{image_filename}", img_content, is_binary=True)
-            if not img_success: success = False
-        
-        # Upload EN Post
-        en_success = await push_file(f"{content_path}/{slug_en}.md", post_en_body)
-        if not en_success: success = False
-        
-        # Upload TR Post
-        tr_success = await push_file(f"{content_path}/{slug_tr}.md", post_tr_body)
-        if not tr_success: success = False
+            files_to_commit.append({
+                "path": f"{images_path}/{image_filename}",
+                "content": img_content,
+                "is_binary": True
+            })
+        files_to_commit.append({
+            "path": f"{content_path}/{slug_en}.md",
+            "content": post_en_body,
+            "is_binary": False
+        })
+        files_to_commit.append({
+            "path": f"{content_path}/{slug_tr}.md",
+            "content": post_tr_body,
+            "is_binary": False
+        })
+
+        try:
+            success = await create_atomic_commit(
+                client, 
+                files_to_commit, 
+                f"Blogger AI: Publish '{blog_en['title']}'"
+            )
+        except Exception as e:
+            logger.error(f"[GITOPS] Atomic commit failed: {e}")
+            success = False
 
     if success:
         commit_url = f"https://github.com/{repo}/commits/main"
