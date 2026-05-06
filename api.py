@@ -1,68 +1,137 @@
-"""
-FastAPI server for the Blogger pipeline.
-Receives Telegram webhooks, validates YouTube links, and enqueues tasks to Redis.
-"""
-import logging
 import os
+import logging
+from datetime import timedelta
+from typing import List
+
 from fastapi import FastAPI, Request
 from redis import Redis
 from rq import Queue
-import requests
 from dotenv import load_dotenv
+import httpx
+
+from utils.telegram import send_message
 
 # Load environment variables
 load_dotenv()
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(title="Blogger API Gateway")
 
-# Get settings from environment variables
+# Configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+ALLOWED_CHAT_IDS_STR = os.getenv("ALLOWED_CHAT_IDS", "")
+ALLOWED_CHAT_IDS = [int(i.strip()) for i in ALLOWED_CHAT_IDS_STR.split(",") if i.strip()]
 
+# Redis & RQ
 redis_conn = Redis(host=REDIS_HOST, port=REDIS_PORT)
-q = Queue('video_tasks', connection=redis_conn)
+q = Queue("blogger_tasks", connection=redis_conn)
+
+def is_allowed(chat_id: int) -> bool:
+    return chat_id in ALLOWED_CHAT_IDS
+
+def get_lock_key(chat_id: int) -> str:
+    return f"pipeline_active_{chat_id}"
+
+def check_session_timeout(chat_id: int):
+    """
+    RQ Job: Checks if a session lock still exists after 24h.
+    If it does, notifies user and clears it.
+    This function is enqueued via q.enqueue_in.
+    """
+    lock_key = get_lock_key(chat_id)
+    if redis_conn.exists(lock_key):
+        redis_conn.delete(lock_key)
+        logger.info(f"[TIMEOUT] Session expired for chat_id={chat_id}")
+        
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        try:
+            # Sync call for RQ worker environment
+            with httpx.Client() as client:
+                client.post(url, json={
+                    "chat_id": chat_id,
+                    "text": "⚠️ Session expired due to 24h timeout. State cleared."
+                })
+        except Exception as e:
+            logger.error(f"[TIMEOUT] Failed to notify {chat_id}: {e}")
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
+    payload = await request.json()
+    
+    # 1. Callback Query Handling
+    if "callback_query" in payload:
+        cq = payload["callback_query"]
+        chat_id = cq["message"]["chat"]["id"]
+        
+        if not is_allowed(chat_id):
+            logger.warning(f"[AUTH] Unauthorized callback from {chat_id}")
+            return {"status": "rejected"}
+            
+        logger.info(f"[CALLBACK] chat_id={chat_id} data={cq.get('data')}")
+        q.enqueue("worker.resume_pipeline", cq)
+        return {"status": "callback_queued"}
+
+    # 2. Message Handling
+    if "message" in payload:
+        msg = payload["message"]
+        chat_id = msg["chat"]["id"]
+        text = msg.get("text", "")
+
+        if not is_allowed(chat_id):
+            logger.warning(f"[AUTH] Unauthorized message from {chat_id}")
+            # Optional: send a one-time rejection if not already enqueued
+            # await send_message(chat_id, "🚫 You are not authorized to use this bot.")
+            return {"status": "rejected"}
+
+        logger.info(f"[MESSAGE] chat_id={chat_id} text={text[:50]}...")
+
+        # Command: /cancel or /reset
+        if text.startswith(("/cancel", "/reset")):
+            redis_conn.delete(get_lock_key(chat_id))
+            logger.info(f"[LOCK] Manual reset for {chat_id}")
+            await send_message(chat_id, "🔓 Session reset. You can start a new request.")
+            return {"status": "reset"}
+
+        # Mutex Check
+        lock_key = get_lock_key(chat_id)
+        if redis_conn.exists(lock_key):
+            # If it's a text message (not a command), it might be a "revise" input
+            if text and not text.startswith("/"):
+                logger.info(f"[REVISE] Forwarding text for {chat_id}")
+                q.enqueue("worker.resume_with_text", msg)
+                return {"status": "revise_queued"}
+            
+            logger.info(f"[LOCK] Busy for {chat_id}")
+            await send_message(chat_id, "⏳ Bot is busy processing your previous request. Use /cancel to reset if stuck.")
+            return {"status": "locked"}
+
+        # Start New Session
+        redis_conn.set(lock_key, "active", ex=86400) # 24h TTL
+        logger.info(f"[LOCK] New session started for {chat_id}")
+        
+        # Schedule Timeout Job
+        q.enqueue_in(timedelta(hours=24), check_session_timeout, chat_id)
+        
+        # Relay to Worker
+        q.enqueue("worker.run_pipeline", msg)
+        await send_message(chat_id, "✅ Request received! Analyzing and starting the pipeline...")
+        return {"status": "queued"}
+
+    return {"status": "ignored"}
+
+@app.get("/health")
+async def health():
     try:
-        data = await request.json()
-        logger.info(f"Received payload: {data}")
-
-
-        # todo : message can contain many other things. not only standard text messages or youtube links.
-        # It's better to send message object as it is to the worker and let it do the heavy lifting.
-        # here API should just be a relay, and let the worker do all the logic.
-        # Check if it's a standard text message (todo - move to worker.py logic)
-        if "message" in data and "text" in data["message"]:
-            chat_id = data["message"]["chat"]["id"]
-            text = data["message"]["text"]
-
-            # Simple validation for YouTube links (todo - will be moved to worker.py logic)
-            if "youtube.com" in text or "youtu.be" in text:
-
-                # todo - Send message received here.
-                # Send immediate feedback to user
-                requests.post(TELEGRAM_API_URL, json={
-                    "chat_id": chat_id,
-                    "text": f"✅ Link received! Analysis process starting...\nLink: {text}"
-                })
-
-                logger.info(f"Sending data to worker: {data}")
-                # Enqueue the task for LXC 3 (Worker)
-                # todo - send data["message"] to worker. not just text.
-                job = q.enqueue('worker.process_video', text, chat_id) # todo : not process video, but process message. also, no need to send chat_id separately
-                logger.info(f"Job successfully enqueued with ID: {job.id}")
-
-                return {"status": "Queued", "job_id": job.id}
-
-        return {"status": "Ignored", "reason": "Not a valid youtube link or text message"} # todo : we should not decide here, just relay whatever comes from worker
-
+        redis_conn.ping()
+        return {"status": "ok", "redis": "connected"}
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "redis": str(e)}

@@ -1,82 +1,124 @@
-"""
-LangGraph AI Worker for the Blogger pipeline.
-Processes queued YouTube links, extracts metadata, and executes AI generation steps.
-"""
 import os
-import requests
-import yt_dlp
-from typing import TypedDict
-from langgraph.graph import StateGraph, END
+import logging
+import asyncio
+from typing import Dict, Any
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.types import Command, interrupt, Send
 from dotenv import load_dotenv
+
+from utils.state import PipelineState
+from utils.telegram import answer_callback_query
 
 # Load environment variables
 load_dotenv()
 
-# 1. Define LangGraph State
-class GraphState(TypedDict):
-    url: str
-    title: str
-    channel: str
-    error: str
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-# 2. Node: Pull YouTube Metadata
-def fetch_metadata_node(state: GraphState):
-    url = state["url"]
-    print(f"Fetching data for [{url}]...")
-    
-    ydl_opts = {
-        'quiet': True, 
-        'skip_download': True,
-        'remote_components': ['ejs:github']
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown Title')
-            channel = info.get('uploader', 'Unknown Channel')
-            error = ""
-        except Exception as e:
-            print(f"Failed to fetch metadata: {e}")
-            title = ""
-            channel = ""
-            error = str(e)
-        
-    return {"title": title, "channel": channel, "error": error}
+CHECKPOINT_DB = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
 
-# 3. LangGraph Setup
 def build_graph():
-    workflow = StateGraph(GraphState)
-    workflow.add_node("fetch_metadata", fetch_metadata_node)
-    workflow.set_entry_point("fetch_metadata")
-    workflow.add_edge("fetch_metadata", END)
-    return workflow.compile()
+    """
+    Constructs the LangGraph pipeline with SqliteSaver persistence.
+    """
+    # Ensure checkpoint directory exists
+    db_dir = os.path.dirname(CHECKPOINT_DB)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
 
-# 4.Main function to be triggered from queue
-def process_video(url: str, chat_id: int = None):
+    # Use checkpointer for persistence across interrupts
+    checkpointer = SqliteSaver.from_conn_string(CHECKPOINT_DB)
+    workflow = StateGraph(PipelineState)
+
+    # --- Node Definitions ---
+    from nodes.intake import intake_node
+    
+    workflow.add_node("intake", intake_node)
+
+    # --- Graph Edges ---
+    workflow.add_edge(START, "intake")
+    workflow.add_edge("intake", END)
+
+    return workflow.compile(checkpointer=checkpointer)
+
+# --- Entry Points for RQ Workers ---
+
+def run_pipeline(message: dict):
+    """
+    Initial entry point for a new blog request.
+    Called by RQ when api.py enqueues a new message.
+    """
+    chat_id = message["chat"]["id"]
+    thread_id = str(chat_id)
+    logger.info(f"[WORKER] run_pipeline: chat_id={chat_id}")
+
     app = build_graph()
-    initial_state = {"url": url, "title": "", "channel": "", "error": ""}
+    config = {"configurable": {"thread_id": thread_id}}
     
-    result = app.invoke(initial_state)
-    
-    print("\n" + "="*40)
-    print("🚀 TASK COMPLETED!")
-    print(f"Channel: {result['channel']}")
-    print(f"Title: {result['title']}")
-    print("="*40 + "\n")
+    # Initialize state
+    initial_state = {
+        "chat_id": chat_id,
+        "thread_id": thread_id,
+        "raw_message": message,
+        "status": "in_progress",
+        "youtube_urls": [],
+        "website_urls": [],
+        "transcripts": [],
+        "writer_outputs": [],
+        "reader_outputs": [],
+        "generated_images": []
+    }
 
-    if chat_id:
-        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        if telegram_token:
-            telegram_api_url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-            if result.get('error'):
-                message_text = f"❌ Analysis Failed!\n\nError: {result['error']}"
-            else:
-                message_text = f"✅ Analysis Completed!\n\n📺 Title: {result['title']}\n👤 Channel: {result['channel']}"
-            try:
-                requests.post(telegram_api_url, json={
-                    "chat_id": chat_id,
-                    "text": message_text
-                })
-            except Exception as e:
-                print(f"Failed to send completion message to Telegram: {e}")
-    return result
+    try:
+        app.invoke(initial_state, config=config)
+    except Exception as e:
+        logger.error(f"[WORKER] Error in run_pipeline: {e}")
+
+def resume_pipeline(callback_query: dict):
+    """
+    Resumes a graph that is waiting at an interrupt() after a button click.
+    """
+    chat_id = callback_query["message"]["chat"]["id"]
+    decision = callback_query.get("data")
+    callback_id = callback_query.get("id")
+    thread_id = str(chat_id)
+
+    logger.info(f"[WORKER] resume_pipeline: chat_id={chat_id} decision={decision}")
+
+    # Answer the callback query to remove Telegram's loading spinner
+    asyncio.run(answer_callback_query(callback_id))
+
+    app = build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        # Command(resume=...) sends the value back to the specific interrupt() call
+        app.invoke(Command(resume=decision), config=config)
+    except Exception as e:
+        logger.error(f"[WORKER] Error in resume_pipeline: {e}")
+
+def resume_with_text(message: dict):
+    """
+    Resumes a graph via a text response (used in the "Revise" loop).
+    """
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "")
+    thread_id = str(chat_id)
+
+    logger.info(f"[WORKER] resume_with_text: chat_id={chat_id}")
+
+    app = build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        # Send a dictionary payload that the node's interrupt handler will parse
+        app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
+    except Exception as e:
+        logger.error(f"[WORKER] Error in resume_with_text: {e}")
