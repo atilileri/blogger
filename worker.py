@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 CHECKPOINT_DB = os.getenv("CHECKPOINT_DB", "checkpoints.sqlite")
 
-def build_graph():
+def build_graph(checkpointer):
     """
     Constructs the LangGraph pipeline with SqliteSaver persistence.
     """
@@ -33,8 +33,6 @@ def build_graph():
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
 
-    # Use checkpointer for persistence across interrupts
-    checkpointer = SqliteSaver.from_conn_string(CHECKPOINT_DB)
     workflow = StateGraph(PipelineState)
 
     # --- Node Definitions ---
@@ -130,9 +128,6 @@ def run_pipeline(message: dict):
     thread_id = str(chat_id)
     logger.info(f"[WORKER] run_pipeline: chat_id={chat_id}")
 
-    app = build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-    
     # Initialize state
     initial_state = {
         "chat_id": chat_id,
@@ -148,7 +143,10 @@ def run_pipeline(message: dict):
     }
 
     try:
-        asyncio.run(app.ainvoke(initial_state, config=config))
+        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+            app = build_graph(checkpointer)
+            config = {"configurable": {"thread_id": thread_id}}
+            asyncio.run(app.ainvoke(initial_state, config=config))
     except Exception as e:
         logger.error(f"[WORKER] Error in run_pipeline: {e}")
 
@@ -166,12 +164,12 @@ def resume_pipeline(callback_query: dict):
     # Answer the callback query to remove Telegram's loading spinner
     asyncio.run(answer_callback_query(callback_id))
 
-    app = build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-
     try:
-        # Command(resume=...) sends the value back to the specific interrupt() call
-        asyncio.run(app.ainvoke(Command(resume=decision), config=config))
+        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+            app = build_graph(checkpointer)
+            config = {"configurable": {"thread_id": thread_id}}
+            # Command(resume=...) sends the value back to the specific interrupt() call
+            asyncio.run(app.ainvoke(Command(resume=decision), config=config))
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_pipeline: {e}")
 
@@ -185,11 +183,11 @@ def resume_with_text(message: dict):
 
     logger.info(f"[WORKER] resume_with_text: chat_id={chat_id}")
 
-    app = build_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-
     try:
-        # Send a dictionary payload that the node's interrupt handler will parse
-        asyncio.run(app.ainvoke(Command(resume={"action": "revise", "text": text}), config=config))
+        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+            app = build_graph(checkpointer)
+            config = {"configurable": {"thread_id": thread_id}}
+            # Send a dictionary payload that the node's interrupt handler will parse
+            asyncio.run(app.ainvoke(Command(resume={"action": "revise", "text": text}), config=config))
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_with_text: {e}")
