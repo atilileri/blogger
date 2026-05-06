@@ -45,6 +45,8 @@ def build_graph():
     from nodes.reference import reference_node
     from nodes.research import research_node
     from nodes.creative import creative_node
+    from nodes.visual import visual_node
+    from nodes.gitops import gitops_node
     
     workflow.add_node("intake", intake_node)
     workflow.add_node("transcription", transcription_node)
@@ -53,6 +55,8 @@ def build_graph():
     workflow.add_node("reference", reference_node)
     workflow.add_node("research", research_node)
     workflow.add_node("creative", creative_node)
+    workflow.add_node("visual", visual_node)
+    workflow.add_node("gitops", gitops_node)
 
     # Node that gathers all parallel results
     async def gather_node(state: PipelineState):
@@ -108,8 +112,10 @@ def build_graph():
 
     workflow.add_conditional_edges("research", route_after_research, ["research", "creative", END])
     
-    # Final sequential steps to END
-    workflow.add_edge("creative", END)
+    # Sequential finish
+    workflow.add_edge("creative", "visual")
+    workflow.add_edge("visual", "gitops")
+    workflow.add_edge("gitops", END)
 
     return workflow.compile(checkpointer=checkpointer)
 
