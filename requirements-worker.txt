@@ -1,5 +1,6 @@
 langgraph
 langgraph-checkpoint-sqlite
+aiosqlite
 langchain-core
 langchain-google-genai
 yt-dlp

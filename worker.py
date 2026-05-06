@@ -148,7 +148,7 @@ def run_pipeline(message: dict):
         with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
             app = build_graph(checkpointer)
             config = {"configurable": {"thread_id": thread_id}}
-            asyncio.run(app.ainvoke(initial_state, config=config))
+            app.invoke(initial_state, config=config)
     except Exception as e:
         logger.error(f"[WORKER] Error in run_pipeline: {e}")
 
@@ -171,7 +171,7 @@ def resume_pipeline(callback_query: dict):
             app = build_graph(checkpointer)
             config = {"configurable": {"thread_id": thread_id}}
             # Command(resume=...) sends the value back to the specific interrupt() call
-            asyncio.run(app.ainvoke(Command(resume=decision), config=config))
+            app.invoke(Command(resume=decision), config=config)
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_pipeline: {e}")
 
@@ -190,6 +190,6 @@ def resume_with_text(message: dict):
             app = build_graph(checkpointer)
             config = {"configurable": {"thread_id": thread_id}}
             # Send a dictionary payload that the node's interrupt handler will parse
-            asyncio.run(app.ainvoke(Command(resume={"action": "revise", "text": text}), config=config))
+            app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_with_text: {e}")
