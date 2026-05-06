@@ -12,7 +12,7 @@ def visual_node(state: PipelineState):
     Step 7: Generates a hero image using Pollinations.ai.
     """
     logger.info(f"[NODE:visual] Generating hero image for {state['chat_id']}")
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     
     blog_en = state.get("blog_json_en", {})
     title = blog_en.get("title", "Technology")

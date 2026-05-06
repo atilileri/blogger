@@ -19,7 +19,7 @@ def reference_node(state: PipelineState):
     logger.info(f"[NODE:reference] Generating references for {chat_id}")
     
     # 1. Generate References via Gemini
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     
     # Combine context from all previous parallel steps
     context_parts = []

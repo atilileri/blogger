@@ -14,7 +14,7 @@ def creative_node(state: PipelineState):
     then generates full EN and TR blog content.
     """
     logger.info(f"[NODE:creative] Starting creative phase for {state['chat_id']}")
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
     # 1. Generate 3 Diverse Storylines
     refs = state.get("references", {}).get("raw", "")
