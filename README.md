@@ -209,3 +209,72 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## LangGraph Pipeline (New Architecture)
+
+The system has been upgraded to a **Multi-Agent LangGraph Pipeline** with distributed processing and **Human-in-the-Loop (HitL)** validation steps.
+
+### Detailed Workflow
+
+```mermaid
+graph TD
+    %% Entry
+    Start([Start]) --> Intake[Intake Node]
+    
+    %% Parallel Processing
+    subgraph Parallel ["Parallel Processing"]
+        Intake -->|Fan-out| Trans[Transcription]
+        Intake -->|Fan-out| Writer[Technical Writer]
+        Intake -->|Fan-out| Reader[Summary Reader]
+    end
+    
+    %% Synchronization
+    Trans --> Gather[Gather Results]
+    Writer --> Gather
+    Reader --> Gather
+    
+    %% HitL Chain
+    Gather --> Ref[Reference Agent]
+    Ref -- "Interrupt: Approve/Revise" --> User1([User])
+    User1 -.->|Resume| Ref
+    
+    Ref --> Research[Research Agent]
+    Research -- "Interrupt: Approve/Revise" --> User2([User])
+    User2 -.->|Resume| Research
+    
+    Research --> Creative[Creative Agent]
+    Creative -- "Interrupt: Select Storyline" --> User3([User])
+    User3 -.->|Resume| Creative
+    
+    %% Finalization
+    Creative --> Visual[Visual Node]
+    Visual --> GitOps[GitOps Node]
+    GitOps --> Success([GitHub Success])
+
+    style Parallel fill:#f9f,stroke:#333,stroke-width:2px
+```
+
+### New Key Features
+
+1.  **Distributed Requirements**:
+    - `requirements-api.txt`: Minimal dependencies for the Gateway LXC (FastAPI, Redis, RQ).
+    - `requirements-worker.txt`: Full AI stack for the Worker LXC (LangGraph, Gemini, yt-dlp, etc.).
+2.  **State Persistence**: Uses `SqliteSaver` to persist the pipeline state. If the worker crashes or the LXC restarts, the pipeline can be resumed from the last checkpoint.
+3.  **Bilingual Support**: Automatically generates and adaptively translates blog posts into both English and Turkish, sharing a unique `translationId`.
+4.  **Security & Mutex**:
+    - **Whitelist**: Only `ALLOWED_CHAT_IDS` can trigger the pipeline.
+    - **Session Lock**: One active pipeline per user. Use `/cancel` to reset.
+    - **Timeout**: Automated 24h cleanup of abandoned sessions via RQ delayed jobs.
+
+### Multi-LXC Deployment
+
+1.  **Node 2 (Gateway)**:
+    - Install `requirements-api.txt`.
+    - Run `uvicorn api:app`.
+2.  **Node 3 (Worker)**:
+    - Install `requirements-worker.txt`.
+    - Install `ffmpeg` and `whisper.cpp` (or `faster-whisper`).
+    - Run `rq worker blogger_tasks`.
+3.  **Shared**: Both nodes must point to the same **Redis** instance (Node 2).
