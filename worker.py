@@ -39,12 +39,50 @@ def build_graph():
 
     # --- Node Definitions ---
     from nodes.intake import intake_node
+    from nodes.transcription import transcription_node
+    from nodes.writer import writer_node
+    from nodes.reader import reader_node
     
     workflow.add_node("intake", intake_node)
+    workflow.add_node("transcription", transcription_node)
+    workflow.add_node("writer", writer_node)
+    workflow.add_node("reader", reader_node)
+
+    # Placeholder for the node that gathers all parallel results
+    async def gather_node(state: PipelineState):
+        logger.info(f"[NODE:gather] Collected {len(state['transcripts'])} transcripts, "
+                    f"{len(state['writer_outputs'])} writer outputs, "
+                    f"{len(state['reader_outputs'])} reader outputs.")
+        return {"status": "processing_completed"}
+
+    workflow.add_node("gather", gather_node)
 
     # --- Graph Edges ---
-    workflow.add_edge(START, "intake")
-    workflow.add_edge("intake", END)
+    def route_to_parallel(state: PipelineState):
+        """
+        Dynamically fans out to parallel nodes using the Send API.
+        """
+        sends = []
+        # Fan out YouTube URLs to transcription
+        for url in state.get("youtube_urls", []):
+            sends.append(Send("transcription", {"url": url}))
+        
+        # Fan out Web URLs to both Writer (technical) and Reader (summary)
+        for url in state.get("website_urls", []):
+            sends.append(Send("writer", {"url": url}))
+            sends.append(Send("reader", {"url": url}))
+        
+        # If no URLs found, go straight to gather
+        if not sends:
+            return "gather"
+            
+        return sends
+
+    workflow.add_conditional_edges("intake", route_to_parallel, ["transcription", "writer", "reader", "gather"])
+    workflow.add_edge("transcription", "gather")
+    workflow.add_edge("writer", "gather")
+    workflow.add_edge("reader", "gather")
+    workflow.add_edge("gather", END)
 
     return workflow.compile(checkpointer=checkpointer)
 
