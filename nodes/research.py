@@ -1,0 +1,95 @@
+import os
+import logging
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import SystemMessage, HumanMessage
+from langgraph.types import interrupt
+from utils.state import PipelineState
+from utils.telegram import send_inline_keyboard, send_message
+from tavily import TavilyClient
+
+logger = logging.getLogger(__name__)
+
+async def research_node(state: PipelineState):
+    """
+    Step 5: Performs web research based on approved references and waits for HitL approval.
+    """
+    logger.info(f"[NODE:research] Starting research for {state['chat_id']}")
+    
+    # 1. Generate search queries based on references and user intent
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+    refs = state.get("references", {}).get("raw", "")
+    
+    query_prompt = (
+        f"Based on the following references and user intent, generate 3 high-quality web search queries "
+        f"to find more technical details, recent news, or complementary data for a blog post.\n\n"
+        f"USER INTENT: {state.get('user_intent', '')}\n"
+        f"REFERENCES:\n{refs}\n\n"
+        "Output only the queries, one per line."
+    )
+    
+    resp = await llm.ainvoke([SystemMessage(content="Generate research queries."), HumanMessage(content=query_prompt)])
+    queries = [q.strip("- ").strip() for q in resp.content.split("\n") if q.strip()][:3]
+    
+    # 2. Execute Search via Tavily
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    snippets = []
+    
+    if tavily_key:
+        tavily = TavilyClient(api_key=tavily_key)
+        for q in queries:
+            try:
+                search_result = tavily.search(query=q, search_depth="advanced", max_results=2)
+                for res in search_result.get("results", []):
+                    snippets.append(f"**{res['title']}**\n{res['content'][:300]}...\nSource: {res['url']}")
+            except Exception as e:
+                logger.error(f"[RESEARCH] Tavily search failed for query '{q}': {e}")
+    else:
+        logger.warning("[RESEARCH] TAVILY_API_KEY not found. Skipping search.")
+        snippets.append("_(No research performed - API key missing)_")
+
+    research_text = "\n\n---\n\n".join(snippets[:5])
+    
+    # 3. Interruption
+    buttons = [
+        [
+            {"text": "✅ Approve", "callback_data": "approve"},
+            {"text": "📝 Revise", "callback_data": "revise"}
+        ],
+        [
+            {"text": "❌ Cancel", "callback_data": "cancel"}
+        ]
+    ]
+    
+    await send_inline_keyboard(
+        state["chat_id"],
+        f"🌐 **Step 2: Web Research Findings**\n\n{research_text}\n\nShould I use these as extra context?",
+        buttons
+    )
+    
+    decision = interrupt("research_decision_required")
+    
+    # 4. Process Decision
+    if decision == "approve":
+        logger.info(f"[NODE:research] Approved by {state['chat_id']}")
+        return {
+            "research_decision": "approve",
+            "research_snippets": snippets
+        }
+    
+    if decision == "cancel":
+        logger.info(f"[NODE:research] Cancelled by {state['chat_id']}")
+        await send_message(state["chat_id"], "⏹️ Pipeline cancelled.")
+        return {"research_decision": "cancel"}
+
+    # Revision
+    revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
+    if not revision_text:
+        await send_message(state["chat_id"], "✍️ Please send your research revision instructions.")
+        decision = interrupt("research_revision_text_required")
+        revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
+
+    logger.info(f"[NODE:research] Revision requested: {revision_text}")
+    return {
+        "research_decision": "revise",
+        "user_intent": f"{state.get('user_intent', '')}\n\nRESEARCH REVISION: {revision_text}"
+    }

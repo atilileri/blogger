@@ -42,17 +42,21 @@ def build_graph():
     from nodes.transcription import transcription_node
     from nodes.writer import writer_node
     from nodes.reader import reader_node
+    from nodes.reference import reference_node
+    from nodes.research import research_node
+    from nodes.creative import creative_node
     
     workflow.add_node("intake", intake_node)
     workflow.add_node("transcription", transcription_node)
     workflow.add_node("writer", writer_node)
     workflow.add_node("reader", reader_node)
+    workflow.add_node("reference", reference_node)
+    workflow.add_node("research", research_node)
+    workflow.add_node("creative", creative_node)
 
-    # Placeholder for the node that gathers all parallel results
+    # Node that gathers all parallel results
     async def gather_node(state: PipelineState):
-        logger.info(f"[NODE:gather] Collected {len(state['transcripts'])} transcripts, "
-                    f"{len(state['writer_outputs'])} writer outputs, "
-                    f"{len(state['reader_outputs'])} reader outputs.")
+        logger.info(f"[NODE:gather] Collected results. Moving to Reference Agent.")
         return {"status": "processing_completed"}
 
     workflow.add_node("gather", gather_node)
@@ -82,7 +86,30 @@ def build_graph():
     workflow.add_edge("transcription", "gather")
     workflow.add_edge("writer", "gather")
     workflow.add_edge("reader", "gather")
-    workflow.add_edge("gather", END)
+    workflow.add_edge("gather", "reference")
+
+    def route_after_reference(state: PipelineState):
+        decision = state.get("reference_decision")
+        if decision == "approve":
+            return "research"
+        if decision == "cancel":
+            return END
+        return "reference"
+
+    workflow.add_conditional_edges("reference", route_after_reference, ["reference", "research", END])
+
+    def route_after_research(state: PipelineState):
+        decision = state.get("research_decision")
+        if decision == "approve":
+            return "creative"
+        if decision == "cancel":
+            return END
+        return "research"
+
+    workflow.add_conditional_edges("research", route_after_research, ["research", "creative", END])
+    
+    # Final sequential steps to END
+    workflow.add_edge("creative", END)
 
     return workflow.compile(checkpointer=checkpointer)
 

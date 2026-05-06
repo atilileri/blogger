@@ -13,3 +13,4 @@ httpx
 redis
 rq
 python-dotenv
+tavily-python
