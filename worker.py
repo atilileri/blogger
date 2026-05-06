@@ -64,6 +64,8 @@ def build_graph(checkpointer):
     workflow.add_node("gather", gather_node)
 
     # --- Graph Edges ---
+    workflow.add_edge(START, "intake")
+
     def route_to_parallel(state: PipelineState):
         """
         Dynamically fans out to parallel nodes using the Send API.
