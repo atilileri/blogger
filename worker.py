@@ -10,8 +10,9 @@ from dotenv import load_dotenv
 
 from utils.state import PipelineState
 from utils.telegram import answer_callback_query, edit_message_text, send_message
-from utils.redis_utils import release_lock
+from utils.redis_utils import release_lock, redis_conn
 import functools
+import uuid
 
 # Load environment variables
 load_dotenv()
@@ -188,8 +189,9 @@ def run_pipeline(message: dict):
     Called by RQ when api.py enqueues a new message.
     """
     chat_id = message["chat"]["id"]
-    thread_id = str(chat_id)
-    logger.info(f"[WORKER] run_pipeline: chat_id={chat_id}")
+    thread_id = str(uuid.uuid4())
+    redis_conn.set(f"thread_{chat_id}", thread_id, ex=3600)
+    logger.info(f"[WORKER] run_pipeline: chat_id={chat_id} thread_id={thread_id}")
 
     # Initialize state
     initial_state = {
@@ -223,9 +225,14 @@ def resume_pipeline(callback_query: dict):
     message_id = callback_query["message"]["message_id"]
     decision = callback_query.get("data")
     callback_id = callback_query.get("id")
-    thread_id = str(chat_id)
+    
+    thread_id_bytes = redis_conn.get(f"thread_{chat_id}")
+    if not thread_id_bytes:
+        logger.error(f"[WORKER] No active thread found for chat_id={chat_id}")
+        return
+    thread_id = thread_id_bytes.decode("utf-8")
 
-    logger.info(f"[WORKER] resume_pipeline: chat_id={chat_id} decision={decision}")
+    logger.info(f"[WORKER] resume_pipeline: chat_id={chat_id} decision={decision} thread_id={thread_id}")
 
     # Answer the callback query to remove Telegram's loading spinner
     answer_callback_query(callback_id, text="⏳ Processing your selection...")
@@ -254,9 +261,14 @@ def resume_with_text(message: dict):
     """
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
-    thread_id = str(chat_id)
+    
+    thread_id_bytes = redis_conn.get(f"thread_{chat_id}")
+    if not thread_id_bytes:
+        logger.error(f"[WORKER] No active thread found for chat_id={chat_id}")
+        return
+    thread_id = thread_id_bytes.decode("utf-8")
 
-    logger.info(f"[WORKER] resume_with_text: chat_id={chat_id}")
+    logger.info(f"[WORKER] resume_with_text: chat_id={chat_id} thread_id={thread_id}")
 
     try:
         with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
