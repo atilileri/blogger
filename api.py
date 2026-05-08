@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import httpx
 
 from utils.telegram import send_message
+from utils.redis_utils import get_lock_key
 
 # Load environment variables
 load_dotenv()
@@ -37,9 +38,6 @@ q = Queue("blogger_tasks", connection=redis_conn)
 def is_allowed(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
 
-def get_lock_key(chat_id: int) -> str:
-    return f"pipeline_active_{chat_id}"
-
 def check_session_timeout(chat_id: int):
     """
     RQ Job: Checks if a session lock still exists after 24h.
@@ -58,7 +56,7 @@ def check_session_timeout(chat_id: int):
             with httpx.Client() as client:
                 client.post(url, json={
                     "chat_id": chat_id,
-                    "text": "⚠️ Session expired due to 24h timeout. State cleared."
+                    "text": "⚠️ Session expired due to 1h timeout. State cleared."
                 })
         except Exception as e:
             logger.error(f"[TIMEOUT] Failed to notify {chat_id}: {e}")
@@ -77,7 +75,7 @@ async def telegram_webhook(request: Request):
             return {"status": "rejected"}
             
         logger.info(f"[CALLBACK] chat_id={chat_id} data={cq.get('data')}")
-        q.enqueue("worker.resume_pipeline", cq)
+        q.enqueue("worker.resume_pipeline", cq, on_failure="worker.handle_system_failure")
         return {"status": "callback_queued"}
 
     # 2. Message Handling
@@ -107,7 +105,7 @@ async def telegram_webhook(request: Request):
             # If it's a text message (not a command), it might be a "revise" input
             if text and not text.startswith("/"):
                 logger.info(f"[REVISE] Forwarding text for {chat_id}")
-                q.enqueue("worker.resume_with_text", msg)
+                q.enqueue("worker.resume_with_text", msg, on_failure="worker.handle_system_failure")
                 return {"status": "revise_queued"}
             
             logger.info(f"[LOCK] Busy for {chat_id}")
@@ -115,14 +113,14 @@ async def telegram_webhook(request: Request):
             return {"status": "locked"}
 
         # Start New Session
-        redis_conn.set(lock_key, "active", ex=86400) # 24h TTL
+        redis_conn.set(lock_key, "active", ex=3600) # 1h TTL
         logger.info(f"[LOCK] New session started for {chat_id}")
         
         # Schedule Timeout Job
-        q.enqueue_in(timedelta(hours=24), check_session_timeout, chat_id)
+        q.enqueue_in(timedelta(hours=1), check_session_timeout, chat_id)
         
         # Relay to Worker
-        q.enqueue("worker.run_pipeline", msg)
+        q.enqueue("worker.run_pipeline", msg, on_failure="worker.handle_system_failure")
         await send_message(chat_id, "✅ Request received! Analyzing and starting the pipeline...")
         return {"status": "queued"}
 

@@ -9,7 +9,9 @@ from langgraph.types import Command, interrupt, Send
 from dotenv import load_dotenv
 
 from utils.state import PipelineState
-from utils.telegram import answer_callback_query, edit_message_text
+from utils.telegram import answer_callback_query, edit_message_text, send_message
+from utils.redis_utils import release_lock
+import functools
 
 # Load environment variables
 load_dotenv()
@@ -120,8 +122,66 @@ def build_graph(checkpointer):
 
     return workflow.compile(checkpointer=checkpointer)
 
+def handle_worker_errors(func):
+    """
+    Decorator to wrap worker entry points. Extracts chat_id, runs task,
+    and handles exceptions by notifying the user and releasing the Redis lock.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"[WORKER] Error in {func.__name__}: {e}", exc_info=True)
+            
+            chat_id = None
+            if args:
+                msg = args[0]
+                if "chat" in msg:
+                    chat_id = msg["chat"]["id"]
+                elif "message" in msg and "chat" in msg["message"]:
+                    chat_id = msg["message"]["chat"]["id"]
+            elif kwargs and "message" in kwargs:
+                msg = kwargs["message"]
+                if "chat" in msg:
+                    chat_id = msg["chat"]["id"]
+            elif kwargs and "callback_query" in kwargs:
+                msg = kwargs["callback_query"]
+                if "message" in msg and "chat" in msg["message"]:
+                    chat_id = msg["message"]["chat"]["id"]
+                    
+            if chat_id:
+                try:
+                    send_message(chat_id, "❌ A pipeline error occurred. Your session has been reset.")
+                    release_lock(chat_id)
+                except Exception as inner_e:
+                    logger.error(f"[WORKER] Failed to handle error for {chat_id}: {inner_e}")
+            raise  # Reraise so RQ knows the job failed
+    return wrapper
+
+def handle_system_failure(job, connection, type, value, traceback):
+    """
+    RQ callback invoked when a job completely fails (e.g., process crashes).
+    """
+    logger.error(f"[WORKER] System failure in job {job.id}: {type} - {value}")
+    if job.args:
+        msg = job.args[0]
+        chat_id = None
+        if "chat" in msg:
+            chat_id = msg["chat"]["id"]
+        elif "message" in msg and "chat" in msg["message"]:
+            chat_id = msg["message"]["chat"]["id"]
+        
+        if chat_id:
+            release_lock(chat_id)
+            try:
+                send_message(chat_id, "⚠️ A system-level worker failure occurred. Your session has been reset.")
+            except Exception as e:
+                logger.error(f"[WORKER] Failed to notify {chat_id} during system failure: {e}")
+
 # --- Entry Points for RQ Workers ---
 
+@handle_worker_errors
 def run_pipeline(message: dict):
     """
     Initial entry point for a new blog request.
@@ -154,6 +214,7 @@ def run_pipeline(message: dict):
     except Exception as e:
         logger.error(f"[WORKER] Error in run_pipeline: {e}")
 
+@handle_worker_errors
 def resume_pipeline(callback_query: dict):
     """
     Resumes a graph that is waiting at an interrupt() after a button click.
@@ -186,6 +247,7 @@ def resume_pipeline(callback_query: dict):
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_pipeline: {e}")
 
+@handle_worker_errors
 def resume_with_text(message: dict):
     """
     Resumes a graph via a text response (used in the "Revise" loop).
