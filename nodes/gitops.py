@@ -155,7 +155,13 @@ translationId: "{trans_id}"
 {data['content']}
 """
 
-        hero_img_web_path = f"/{images_path}/{image_filename}".replace("//", "/") if img_content else None
+        web_images_path = images_path
+        if web_images_path.startswith("public"):
+            web_images_path = web_images_path[len("public"):]
+        if not web_images_path.startswith("/"):
+            web_images_path = "/" + web_images_path
+
+        hero_img_web_path = f"{web_images_path}/{image_filename}".replace("//", "/") if img_content else None
         post_en_body = format_post(blog_en, "en", hero_img_web_path)
         post_tr_body = format_post(blog_tr, "tr", hero_img_web_path)
 

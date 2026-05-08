@@ -93,7 +93,46 @@ def send_inline_keyboard(chat_id: int, text: str, buttons: list, parse_mode: str
             logger.error(f"[TELEGRAM] Failed to send inline keyboard to {chat_id}: {e}")
             return None
 
-def answer_callback_query(callback_query_id: str, text: str = None):
+def edit_message_text(chat_id: int, message_id: int, text: str, parse_mode: str = "Markdown"):
+    """
+    Edit an existing message (e.g., to replace inline buttons with confirmation text).
+    If parse_mode fails, falls back to plain text.
+    """
+    url = f"{API_URL}/editMessageText"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    with httpx.Client() as client:
+        try:
+            resp = client.post(url, json=payload)
+            resp.raise_for_status()
+            logger.info(f"[TELEGRAM] Edited message {message_id} in {chat_id}")
+            return resp.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400 and "parse_mode" in payload:
+                logger.warning(f"[TELEGRAM] Formatting error for edit {message_id}, retrying without parse_mode...")
+                del payload["parse_mode"]
+                try:
+                    resp_fallback = client.post(url, json=payload)
+                    resp_fallback.raise_for_status()
+                    logger.info(f"[TELEGRAM] Edited message {message_id} in {chat_id} (Fallback Plain Text)")
+                    return resp_fallback.json()
+                except Exception as fallback_err:
+                    logger.error(f"[TELEGRAM] Fallback edit failed: {fallback_err}")
+                    return None
+            else:
+                logger.error(f"[TELEGRAM] HTTP error editing message: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"[TELEGRAM] Failed to edit message {message_id} in {chat_id}: {e}")
+            return None
+
+def answer_callback_query(callback_query_id: str, text: str = "⏳ Processing..."):
     """
     Acknowledge a callback query to remove the loading spinner on the button.
     """

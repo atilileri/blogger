@@ -23,58 +23,62 @@ def research_node(state: PipelineState):
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     refs = (state.get("references") or {}).get("raw", "")
     
-    query_prompt = (
-        f"Based on the following references and user intent, generate 3 high-quality web search queries "
-        f"to find more technical details, recent news, or complementary data for a blog post.\n\n"
-        f"USER INTENT: {state.get('user_intent', '')}\n"
-        f"REFERENCES:\n{refs}\n\n"
-        "Output only the queries, one per line."
-    )
+    snippets = state.get("research_snippets", [])
+    decision_state = state.get("research_decision")
     
-    resp = llm.invoke([SystemMessage(content="Generate research queries."), HumanMessage(content=query_prompt)])
-    # Filter out empty lines and markdown code block artifacts
-    queries = [
-        q.strip("- ").strip() 
-        for q in resp.content.split("\n") 
-        if q.strip() and not q.strip().startswith("```")
-    ][:3]
-    
-    # 2. Execute Search via Tavily
-    tavily_key = os.getenv("TAVILY_API_KEY")
-    snippets = []
-    
-    if tavily_key:
-        tavily = TavilyClient(api_key=tavily_key)
-        for q in queries:
-            try:
-                search_result = tavily.search(query=q, search_depth="advanced", max_results=2)
-                for res in search_result.get("results", []):
-                    snippets.append(f"**{res['title']}**\n{res['content'][:300]}...\nSource: {res['url']}")
-            except Exception as e:
-                logger.error(f"[RESEARCH] Tavily search failed for query '{q}': {e}")
-    else:
-        logger.warning("[RESEARCH] TAVILY_API_KEY not found. Skipping search.")
-        snippets.append("_(No research performed - API key missing)_")
+    if not snippets or decision_state == "revise":
+        query_prompt = (
+            f"Based on the following references and user intent, generate 3 high-quality web search queries "
+            f"to find more technical details, recent news, or complementary data for a blog post.\n\n"
+            f"USER INTENT: {state.get('user_intent', '')}\n"
+            f"REFERENCES:\n{refs}\n\n"
+            "Output only the queries, one per line."
+        )
+        
+        resp = llm.invoke([SystemMessage(content="Generate research queries."), HumanMessage(content=query_prompt)])
+        # Filter out empty lines and markdown code block artifacts
+        queries = [
+            q.strip("- ").strip() 
+            for q in resp.content.split("\n") 
+            if q.strip() and not q.strip().startswith("```")
+        ][:3]
+        
+        # 2. Execute Search via Tavily
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        snippets = []
+        
+        if tavily_key:
+            tavily = TavilyClient(api_key=tavily_key)
+            for q in queries:
+                try:
+                    search_result = tavily.search(query=q, search_depth="advanced", max_results=2)
+                    for res in search_result.get("results", []):
+                        snippets.append(f"**{res['title']}**\n{res['content'][:300]}...\nSource: {res['url']}")
+                except Exception as e:
+                    logger.error(f"[RESEARCH] Tavily search failed for query '{q}': {e}")
+        else:
+            logger.warning("[RESEARCH] TAVILY_API_KEY not found. Skipping search.")
+            snippets.append("_(No research performed - API key missing)_")
 
-    research_text = "\n\n---\n\n".join(snippets[:5])
-    
-    # 3. Interruption
-    buttons = [
-        [
-            {"text": "✅ Approve", "callback_data": "approve"},
-            {"text": "📝 Revise", "callback_data": "revise"}
-        ],
-        [
-            {"text": "❌ Cancel", "callback_data": "cancel"}
+        research_text = "\n\n---\n\n".join(snippets[:5])
+        
+        # 3. Interruption
+        buttons = [
+            [
+                {"text": "✅ Approve", "callback_data": "approve"},
+                {"text": "📝 Revise", "callback_data": "revise"}
+            ],
+            [
+                {"text": "❌ Cancel", "callback_data": "cancel"}
+            ]
         ]
-    ]
-    
-    send_inline_keyboard(
-        chat_id,
-        f"🌐 **Step 2: Web Research Findings**\n\n{research_text}\n\nShould I use these as extra context?",
-        buttons
-    )
-    
+        
+        send_inline_keyboard(
+            chat_id,
+            f"🌐 **Step 2: Web Research Findings**\n\n{research_text}\n\nShould I use these as extra context?",
+            buttons
+        )
+        
     decision = interrupt("research_decision_required")
     
     # 4. Process Decision

@@ -16,38 +16,41 @@ def creative_node(state: PipelineState):
     logger.info(f"[NODE:creative] Starting creative phase for {state['chat_id']}")
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
-    # 1. Generate 3 Diverse Storylines
-    refs = state.get("references", {}).get("raw", "")
-    research = "\n".join(state.get("research_snippets", []))
-    
-    storyline_prompt = (
-        "You are a creative lead. Based on the following references and research, "
-        "propose 3 diverse storylines for a blog post. Each storyline should have a "
-        "unique angle (e.g., Technical Deep Dive, Future Vision, Practical Tutorial).\n\n"
-        f"REFERENCES:\n{refs}\n\n"
-        f"RESEARCH:\n{research}\n\n"
-        "Format: Storyline 1: [Title] - [Summary] ---\n"
-        "Storyline 2: [Title] - [Summary] ---\n"
-        "Storyline 3: [Title] - [Summary]\n"
-    )
+    # Idempotent: reuse existing storylines if already generated
+    storylines_list = state.get("storylines", [])
+    if not storylines_list:
+        # 1. Generate 3 Diverse Storylines
+        refs = state.get("references", {}).get("raw", "")
+        research = "\n".join(state.get("research_snippets", []))
+        
+        storyline_prompt = (
+            "You are a creative lead. Based on the following references and research, "
+            "propose 3 diverse storylines for a blog post. Each storyline should have a "
+            "unique angle (e.g., Technical Deep Dive, Future Vision, Practical Tutorial).\n\n"
+            f"REFERENCES:\n{refs}\n\n"
+            f"RESEARCH:\n{research}\n\n"
+            "Format: Storyline 1: [Title] - [Summary] ---\n"
+            "Storyline 2: [Title] - [Summary] ---\n"
+            "Storyline 3: [Title] - [Summary]\n"
+        )
 
-    resp = llm.invoke([SystemMessage(content="Generate 3 diverse blog storylines."), HumanMessage(content=storyline_prompt)])
-    storylines_raw = resp.content
-    storylines_list = [s.strip() for s in storylines_raw.split("---") if s.strip()]
+        resp = llm.invoke([SystemMessage(content="Generate 3 diverse blog storylines."), HumanMessage(content=storyline_prompt)])
+        storylines_raw = resp.content
+        storylines_list = [s.strip() for s in storylines_raw.split("---") if s.strip() and len(s.strip()) > 20]
 
-    # 2. Storyline Selection Interruption
-    buttons = []
-    row = []
-    for i in range(len(storylines_list)):
-        row.append({"text": f"Story {i+1}", "callback_data": str(i)})
-    buttons.append(row)
-    buttons.append([{"text": "❌ Cancel", "callback_data": "cancel"}])
+        # 2. Storyline Selection Interruption
+        buttons = []
+        row = []
+        for i in range(len(storylines_list)):
+            row.append({"text": f"Story {i+1}", "callback_data": str(i)})
+        buttons.append(row)
+        buttons.append([{"text": "❌ Cancel", "callback_data": "cancel"}])
 
-    send_inline_keyboard(
-        state["chat_id"],
-        f"🎭 **Step 3: Choose a Storyline**\n\n{storylines_raw}\n\nWhich angle should we take?",
-        buttons
-    )
+        send_inline_keyboard(
+            state["chat_id"],
+            f"🎭 **Step 3: Choose a Storyline**\n\n{storylines_raw}\n\nWhich angle should we take?",
+            buttons
+        )
 
     selection = interrupt("storyline_selection_required")
     
@@ -71,7 +74,10 @@ def creative_node(state: PipelineState):
     en_prompt = (
         f"Write a full, high-quality blog post in English based on this storyline: {chosen_storyline}\n\n"
         f"Include context from these references: {refs}\n\n"
-        "Output as JSON with keys: title, description, tags (list), content (markdown)."
+        "Output as JSON with keys: title, description, tags (list), content (markdown). "
+        "Also include an 'image_description' key: a detailed, cinematic image prompt optimized for "
+        "a wide 16:9 aspect ratio hero image (1404x810). Describe composition, lighting, color palette, "
+        "mood, depth of field, and artistic style. Do NOT include any text or typography in the image."
     )
     
     en_resp = llm.invoke([

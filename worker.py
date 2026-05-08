@@ -9,7 +9,7 @@ from langgraph.types import Command, interrupt, Send
 from dotenv import load_dotenv
 
 from utils.state import PipelineState
-from utils.telegram import answer_callback_query
+from utils.telegram import answer_callback_query, edit_message_text
 
 # Load environment variables
 load_dotenv()
@@ -28,6 +28,7 @@ def build_graph(checkpointer):
     """
     Constructs the LangGraph pipeline with SqliteSaver persistence.
     """
+    logger.debug("[WORKER] Building graph...")
     # Ensure checkpoint directory exists
     db_dir = os.path.dirname(CHECKPOINT_DB)
     if db_dir and not os.path.exists(db_dir):
@@ -148,6 +149,7 @@ def run_pipeline(message: dict):
         with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
             app = build_graph(checkpointer)
             config = {"configurable": {"thread_id": thread_id}}
+            logger.debug("[WORKER] Invoking graph for run_pipeline")
             app.invoke(initial_state, config=config)
     except Exception as e:
         logger.error(f"[WORKER] Error in run_pipeline: {e}")
@@ -157,6 +159,7 @@ def resume_pipeline(callback_query: dict):
     Resumes a graph that is waiting at an interrupt() after a button click.
     """
     chat_id = callback_query["message"]["chat"]["id"]
+    message_id = callback_query["message"]["message_id"]
     decision = callback_query.get("data")
     callback_id = callback_query.get("id")
     thread_id = str(chat_id)
@@ -164,13 +167,21 @@ def resume_pipeline(callback_query: dict):
     logger.info(f"[WORKER] resume_pipeline: chat_id={chat_id} decision={decision}")
 
     # Answer the callback query to remove Telegram's loading spinner
-    answer_callback_query(callback_id)
+    answer_callback_query(callback_id, text="⏳ Processing your selection...")
+
+    # Edit the original message to reflect the choice and remove buttons
+    edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f"✅ **Approved Selection**: {decision}"
+    )
 
     try:
         with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
             app = build_graph(checkpointer)
             config = {"configurable": {"thread_id": thread_id}}
             # Command(resume=...) sends the value back to the specific interrupt() call
+            logger.debug(f"[WORKER] Invoking graph with resume={decision}")
             app.invoke(Command(resume=decision), config=config)
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_pipeline: {e}")
@@ -190,6 +201,7 @@ def resume_with_text(message: dict):
             app = build_graph(checkpointer)
             config = {"configurable": {"thread_id": thread_id}}
             # Send a dictionary payload that the node's interrupt handler will parse
+            logger.debug(f"[WORKER] Invoking graph with revise text")
             app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
     except Exception as e:
         logger.error(f"[WORKER] Error in resume_with_text: {e}")
