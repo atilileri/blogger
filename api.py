@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from datetime import timedelta
 from typing import List
 
@@ -49,15 +50,8 @@ def check_session_timeout(chat_id: int):
         redis_conn.delete(lock_key)
         logger.info(f"[TIMEOUT] Session expired for chat_id={chat_id}")
         
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
         try:
-            # Sync call for RQ worker environment
-            with httpx.Client() as client:
-                client.post(url, json={
-                    "chat_id": chat_id,
-                    "text": "⚠️ Session expired due to 1h timeout. State cleared."
-                })
+            send_message(chat_id, "⚠️ Session expired due to 1h timeout. State cleared.")
         except Exception as e:
             logger.error(f"[TIMEOUT] Failed to notify {chat_id}: {e}")
 
@@ -96,7 +90,7 @@ async def telegram_webhook(request: Request):
         if text.startswith(("/cancel", "/reset")):
             redis_conn.delete(get_lock_key(chat_id))
             logger.info(f"[LOCK] Manual reset for {chat_id}")
-            await send_message(chat_id, "🔓 Session reset. You can start a new request.")
+            await asyncio.to_thread(send_message, chat_id, "🔓 Session reset. You can start a new request.")
             return {"status": "reset"}
 
         # Mutex Check
@@ -109,7 +103,7 @@ async def telegram_webhook(request: Request):
                 return {"status": "revise_queued"}
             
             logger.info(f"[LOCK] Busy for {chat_id}")
-            await send_message(chat_id, "⏳ Bot is busy processing your previous request. Use /cancel to reset if stuck.")
+            await asyncio.to_thread(send_message, chat_id, "⏳ Bot is busy processing your previous request. Use /cancel to reset if stuck.")
             return {"status": "locked"}
 
         # Start New Session
@@ -121,7 +115,7 @@ async def telegram_webhook(request: Request):
         
         # Relay to Worker
         q.enqueue("worker.run_pipeline", msg, on_failure="worker.handle_system_failure")
-        await send_message(chat_id, "✅ Request received! Analyzing and starting the pipeline...")
+        await asyncio.to_thread(send_message, chat_id, "✅ Request received! Analyzing and starting the pipeline...")
         return {"status": "queued"}
 
     return {"status": "ignored"}
