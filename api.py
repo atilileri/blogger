@@ -89,6 +89,7 @@ async def telegram_webhook(request: Request):
         # Command: /cancel or /reset
         if text.startswith(("/cancel", "/reset")):
             redis_conn.delete(get_lock_key(chat_id))
+            redis_conn.delete(f"thread_{chat_id}")
             logger.info(f"[LOCK] Manual reset for {chat_id}")
             await asyncio.to_thread(send_message, chat_id, "🔓 Session reset. You can start a new request.")
             return {"status": "reset"}

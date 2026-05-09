@@ -5,6 +5,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.types import interrupt
 from utils.state import PipelineState
 from utils.telegram import send_inline_keyboard, send_message
+from utils.redis_utils import redis_conn
 
 logger = logging.getLogger(__name__)
 
@@ -18,44 +19,57 @@ def creative_node(state: PipelineState):
 
     # Idempotent: reuse existing storylines if already generated
     storylines_list = state.get("storylines", [])
+    
+    thread_id = state.get("thread_id", "")
+    cache_key = f"cache_{thread_id}_creative"
+    
     if not storylines_list:
-        # 1. Generate 3 Diverse Storylines
-        refs = state.get("references", {}).get("raw", "")
-        research = "\n".join(state.get("research_snippets", []))
-        
-        storyline_prompt = (
-            "You are a creative lead. Based on the following references and research, "
-            "propose 3 diverse storylines for a blog post. Each storyline should have a "
-            "unique angle (e.g., Technical Deep Dive, Future Vision, Practical Tutorial).\n\n"
-            f"REFERENCES:\n{refs}\n\n"
-            f"RESEARCH:\n{research}\n\n"
-            "Format: Storyline 1: [Title] - [Summary] ---\n"
-            "Storyline 2: [Title] - [Summary] ---\n"
-            "Storyline 3: [Title] - [Summary]\n"
-        )
+        cached = redis_conn.get(cache_key)
+        if cached:
+            storylines_list = json.loads(cached.decode("utf-8"))
+            storylines_raw = "\n---\n".join(storylines_list)
+        else:
+            # 1. Generate 3 Diverse Storylines
+            refs = state.get("references", {}).get("raw", "")
+            research = "\n".join(state.get("research_snippets", []))
+            
+            storyline_prompt = (
+                "You are a creative lead. Based on the following references and research, "
+                "propose 3 diverse storylines for a blog post. Each storyline should have a "
+                "unique angle (e.g., Technical Deep Dive, Future Vision, Practical Tutorial).\n\n"
+                f"REFERENCES:\n{refs}\n\n"
+                f"RESEARCH:\n{research}\n\n"
+                "Format: Storyline 1: [Title] - [Summary] ---\n"
+                "Storyline 2: [Title] - [Summary] ---\n"
+                "Storyline 3: [Title] - [Summary]\n"
+            )
 
-        resp = llm.invoke([SystemMessage(content="Generate 3 diverse blog storylines."), HumanMessage(content=storyline_prompt)])
-        storylines_raw = resp.content
-        storylines_list = [s.strip() for s in storylines_raw.split("---") if s.strip() and len(s.strip()) > 20]
+            resp = llm.invoke([SystemMessage(content="Generate 3 diverse blog storylines."), HumanMessage(content=storyline_prompt)])
+            storylines_raw = resp.content
+            storylines_list = [s.strip() for s in storylines_raw.split("---") if s.strip() and len(s.strip()) > 20]
 
-        # 2. Storyline Selection Interruption
-        buttons = []
-        row = []
-        for i in range(len(storylines_list)):
-            row.append({"text": f"Story {i+1}", "callback_data": str(i)})
-        buttons.append(row)
-        buttons.append([{"text": "❌ Cancel", "callback_data": "cancel"}])
+            if thread_id:
+                redis_conn.set(cache_key, json.dumps(storylines_list), ex=86400)
 
-        send_inline_keyboard(
-            state["chat_id"],
-            f"🎭 **Step 3: Choose a Storyline**\n\n{storylines_raw}\n\nWhich angle should we take?",
-            buttons
-        )
+            # 2. Storyline Selection Interruption
+            buttons = []
+            row = []
+            for i in range(len(storylines_list)):
+                row.append({"text": f"Story {i+1}", "callback_data": str(i)})
+            buttons.append(row)
+            buttons.append([{"text": "❌ Cancel", "callback_data": "cancel"}])
+
+            send_inline_keyboard(
+                state["chat_id"],
+                f"🎭 **Step 3: Choose a Storyline**\n\n{storylines_raw}\n\nWhich angle should we take?",
+                buttons
+            )
 
     selection = interrupt("storyline_selection_required")
     
     if selection == "cancel":
         send_message(state["chat_id"], "⏹️ Pipeline cancelled.")
+        redis_conn.delete(cache_key)
         return {"status": "cancelled"}
 
     try:
@@ -64,7 +78,10 @@ def creative_node(state: PipelineState):
     except (ValueError, IndexError):
         logger.error(f"[CREATIVE] Invalid selection: {selection}")
         send_message(state["chat_id"], "⚠️ Invalid selection. Please try starting over.")
+        redis_conn.delete(cache_key)
         return {"status": "error"}
+
+    redis_conn.delete(cache_key)
 
     logger.info(f"[NODE:creative] Storyline {idx+1} selected. Generating full posts...")
     send_message(state["chat_id"], f"✍️ Storyline {idx+1} selected! Generating full English and Turkish posts... This may take a minute.")

@@ -238,10 +238,11 @@ def resume_pipeline(callback_query: dict):
     answer_callback_query(callback_id, text="⏳ Processing your selection...")
 
     # Edit the original message to reflect the choice and remove buttons
+    original_text = callback_query["message"].get("text", "")
     edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
-        text=f"✅ **Approved Selection**: {decision}"
+        text=f"{original_text}\n\n✅ **Approved Selection**: {decision}"
     )
 
     try:

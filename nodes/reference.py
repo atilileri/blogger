@@ -5,6 +5,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.types import interrupt
 from utils.state import PipelineState
 from utils.telegram import send_inline_keyboard, send_message
+from utils.redis_utils import redis_conn
 
 logger = logging.getLogger(__name__)
 def reference_node(state: PipelineState):
@@ -22,37 +23,48 @@ def reference_node(state: PipelineState):
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
     
     # Check if we already have references and aren't revising
+    thread_id = state.get("thread_id", "")
+    cache_key = f"cache_{thread_id}_reference"
+    
     refs_text = state.get("references", {}).get("raw", "")
     decision_state = state.get("reference_decision")
     
     if not refs_text or decision_state == "revise":
-        # Combine context from all previous parallel steps
-        context_parts = []
-        for t in state.get("transcripts", []):
-            context_parts.append(f"SOURCE (YouTube): {t['text']}")
-        for w in state.get("writer_outputs", []):
-            context_parts.append(f"SOURCE (Technical): {w['analysis']}")
-        for r in state.get("reader_outputs", []):
-            context_parts.append(f"SOURCE (Summary): {r['summary']}")
+        cached = redis_conn.get(cache_key)
+        if cached:
+            refs_text = cached.decode("utf-8")
+        else:
+            # Combine context from all previous parallel steps
+            context_parts = []
+            for t in state.get("transcripts", []):
+                context_parts.append(f"SOURCE (YouTube): {t['text']}")
+            for w in state.get("writer_outputs", []):
+                context_parts.append(f"SOURCE (Technical): {w['analysis']}")
+            for r in state.get("reader_outputs", []):
+                context_parts.append(f"SOURCE (Summary): {r['summary']}")
+                
+            context = "\n\n".join(context_parts)
             
-        context = "\n\n".join(context_parts)
-        
-        prompt = (
-            "You are an expert content strategist. Based on the provided context and the user's intent, "
-            "identify the most important references for a blog post.\n\n"
-            "Please provide:\n"
-            "1. Three key concepts or technical terms.\n"
-            "2. Two powerful quotes (if available).\n"
-            "3. Three main themes/topics to cover.\n\n"
-            f"USER INTENT: {state.get('user_intent', 'Write a detailed blog post.')}\n\n"
-            f"CONTEXT:\n{context[:10000]}" # Truncate if too long for flash
-        )
+            prompt = (
+                "You are an expert content strategist. Based on the provided context and the user's intent, "
+                "identify the most important references for a blog post.\n\n"
+                "Please provide:\n"
+                "1. Three key concepts or technical terms.\n"
+                "2. Two powerful quotes (if available).\n"
+                "3. Three main themes/topics to cover.\n\n"
+                f"USER INTENT: {state.get('user_intent', 'Write a detailed blog post.')}\n\n"
+                f"CONTEXT:\n{context[:10000]}" # Truncate if too long for flash
+            )
 
-        resp = llm.invoke([SystemMessage(content="Extract structured references for a blog post."), HumanMessage(content=prompt)])
-        refs_text = resp.content
+            resp = llm.invoke([SystemMessage(content="Extract structured references for a blog post."), HumanMessage(content=prompt)])
+            refs_text = resp.content
 
-        # 2. Presentation & Interruption
-        buttons = [
+            # Cache it before interrupting
+            if thread_id:
+                redis_conn.set(cache_key, refs_text, ex=86400)
+
+            # 2. Presentation & Interruption
+            buttons = [
             [
                 {"text": "✅ Approve", "callback_data": "approve"},
                 {"text": "📝 Revise", "callback_data": "revise"}
@@ -76,6 +88,7 @@ def reference_node(state: PipelineState):
     # 4. Process Decision
     if decision == "approve":
         logger.info(f"[NODE:reference] Approved by {chat_id}")
+        redis_conn.delete(cache_key)
         return {
             "reference_decision": "approve",
             "references": {"raw": refs_text}
@@ -83,6 +96,7 @@ def reference_node(state: PipelineState):
     
     if decision == "cancel":
         logger.info(f"[NODE:reference] Cancelled by {chat_id}")
+        redis_conn.delete(cache_key)
         send_message(chat_id, "⏹️ Pipeline cancelled.")
         return {"reference_decision": "cancel"}
     
@@ -97,6 +111,7 @@ def reference_node(state: PipelineState):
         revision_text = decision.get("text", "") if isinstance(decision, dict) else ""
 
     logger.info(f"[NODE:reference] Revision requested: {revision_text}")
+    redis_conn.delete(cache_key)
     return {
         "reference_decision": "revise",
         "user_intent": f"{state.get('user_intent', '')}\n\nREVISION: {revision_text}"
