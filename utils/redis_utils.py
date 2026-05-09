@@ -14,8 +14,16 @@ def get_lock_key(chat_id: int) -> str:
     """Returns the Redis key used to lock a chat session."""
     return f"pipeline_active_{chat_id}"
 
+def acquire_lock(chat_id: int, ttl: int = 3600) -> bool:
+    """
+    Attempts to acquire a lock for the given chat_id.
+    Returns True if successful, False if already locked.
+    """
+    lock_key = get_lock_key(chat_id)
+    # nx=True means only set if it doesn't exist
+    return bool(redis_conn.set(lock_key, "active", ex=ttl, nx=True))
+
 def release_lock(chat_id: int):
     """Deletes the active session lock for the given chat_id if it exists."""
     lock_key = get_lock_key(chat_id)
-    if redis_conn.exists(lock_key):
-        redis_conn.delete(lock_key)
+    redis_conn.delete(lock_key)

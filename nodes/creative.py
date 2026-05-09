@@ -117,12 +117,13 @@ def creative_node(state: PipelineState):
 
     try:
         # Clean potential markdown code blocks from LLM output
-        def parse_llm_json(text):
+        def parse_llm_json(text, label):
+            logger.debug(f"[CREATIVE] Parsing {label} content: {text[:100]}...")
             clean = text.replace("```json", "").replace("```", "").strip()
             return json.loads(clean)
 
-        blog_en = parse_llm_json(en_resp.content)
-        blog_tr = parse_llm_json(tr_resp.content)
+        blog_en = parse_llm_json(en_resp.content, "English")
+        blog_tr = parse_llm_json(tr_resp.content, "Turkish")
 
         return {
             "storylines": storylines_list,
@@ -133,5 +134,7 @@ def creative_node(state: PipelineState):
         }
     except Exception as e:
         logger.error(f"[CREATIVE] JSON parsing failed: {e}")
+        logger.error(f"[CREATIVE] EN Content: {en_resp.content[:200]}...")
+        logger.error(f"[CREATIVE] TR Content: {tr_resp.content[:200]}...")
         send_message(state["chat_id"], "❌ Failed to generate structured content. Please try /cancel and restart.")
         return {"status": "error"}

@@ -1,3 +1,4 @@
+from utils.redis_utils import acquire_lock
 import os
 import logging
 import asyncio
@@ -113,21 +114,18 @@ async def telegram_webhook(request: Request):
             await asyncio.to_thread(send_message, chat_id, help_text)
             return {"status": "help_sent"}
 
-        # Mutex Check
-        lock_key = get_lock_key(chat_id)
-        if redis_conn.exists(lock_key):
+        # Start New Session
+        if not acquire_lock(chat_id):
             # If it's a text message (not a command), it might be a "revise" input
             if text and not text.startswith("/"):
                 logger.info(f"[REVISE] Forwarding text for {chat_id}")
                 q.enqueue("worker.resume_with_text", msg, on_failure="worker.handle_system_failure")
                 return {"status": "revise_queued"}
-            
+
             logger.info(f"[LOCK] Busy for {chat_id}")
             await asyncio.to_thread(send_message, chat_id, "⏳ Bot is busy processing your previous request. Use /cancel to reset if stuck.")
             return {"status": "locked"}
 
-        # Start New Session
-        redis_conn.set(lock_key, "active", ex=3600) # 1h TTL
         logger.info(f"[LOCK] New session started for {chat_id}")
         
         # Schedule Timeout Job

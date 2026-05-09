@@ -213,7 +213,10 @@ def run_pipeline(message: dict):
         app = build_graph(checkpointer)
         config = {"configurable": {"thread_id": thread_id}}
         logger.debug("[WORKER] Invoking graph for run_pipeline")
-        app.invoke(initial_state, config=config)
+        final_state = app.invoke(initial_state, config=config)
+        if final_state.get("status") == "completed":
+            logger.info(f"[WORKER] Pipeline completed successfully for {chat_id}. Releasing lock.")
+            release_lock(chat_id)
 
 @handle_worker_errors
 def resume_pipeline(callback_query: dict):
@@ -260,7 +263,10 @@ def resume_pipeline(callback_query: dict):
         config = {"configurable": {"thread_id": thread_id}}
         # Command(resume=...) sends the value back to the specific interrupt() call
         logger.debug(f"[WORKER] Invoking graph with resume={decision}")
-        app.invoke(Command(resume=decision), config=config)
+        final_state = app.invoke(Command(resume=decision), config=config)
+        if final_state.get("status") == "completed":
+            logger.info(f"[WORKER] Pipeline completed successfully for {chat_id} after resume. Releasing lock.")
+            release_lock(chat_id)
 
 @handle_worker_errors
 def resume_with_text(message: dict):
@@ -283,7 +289,10 @@ def resume_with_text(message: dict):
         config = {"configurable": {"thread_id": thread_id}}
         # Send a dictionary payload that the node's interrupt handler will parse
         logger.debug(f"[WORKER] Invoking graph with revise text")
-        app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
+        final_state = app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
+        if final_state.get("status") == "completed":
+            logger.info(f"[WORKER] Pipeline completed successfully for {chat_id} after resume_with_text. Releasing lock.")
+            release_lock(chat_id)
 
 def send_pipeline_state(chat_id: int):
     """

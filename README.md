@@ -198,6 +198,39 @@ set -a; source .env; set +a
 rq worker video_tasks --url redis://${REDIS_HOST}:${REDIS_PORT}
 ```
 
+## Local Integration Testing
+
+To ensure the pipeline is robust and handles transitions correctly without incurring LLM costs or spamming Telegram, we use a **Hybrid Local Testing** setup. This setup mocks all external I/O (Telegram, LLMs, YouTube) while running the actual LangGraph and business logic.
+
+### 1. Setup Test Environment
+Install the testing dependencies:
+```bash
+pip install -r requirements-test.txt
+```
+
+### 2. Automated Scenarios (Pytest)
+We use `pytest` to run predefined end-to-end scenarios (Happy Path, Revisions, Error Handling). 
+- **Mocking Strategy**: Low-level network calls (LLM invokes, Telegram API) are intercepted. LangChain prompts and LangGraph state logic are fully exercised.
+- **Run all tests:**
+  ```bash
+  pytest -s tests/test_scenarios.py
+  ```
+  *(The `-s` flag is important to see the simulated Telegram messages in your console).*
+
+### 3. Interactive CLI Simulator
+If you want to manually step through the pipeline and choose responses at each "Human-in-the-Loop" step without using a real Telegram bot:
+```bash
+python simulator.py
+```
+- This script will pause at each interrupt and ask for your input (Approve, Revise, or specific story index).
+- It prints all logs and simulated Telegram outputs directly to the terminal.
+
+### What is being tested?
+- **LangGraph State Transitions**: Ensuring nodes follow the correct path based on user decisions.
+- **Human-in-the-Loop (HitL)**: Verifying the graph correctly interrupts and resumes from checkpoints.
+- **Redis & Mutex**: Confirming sessions are locked during processing and unlocked on completion or failure.
+- **Error Handling**: Validating that system or logic crashes trigger user notifications and session cleanups.
+
 ## Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
 
