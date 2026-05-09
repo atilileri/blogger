@@ -94,6 +94,25 @@ async def telegram_webhook(request: Request):
             await asyncio.to_thread(send_message, chat_id, "🔓 Session reset. You can start a new request.")
             return {"status": "reset"}
 
+        # Command: /state
+        if text.startswith("/state"):
+            logger.info(f"[STATE] Querying state for {chat_id}")
+            q.enqueue("worker.send_pipeline_state", chat_id)
+            return {"status": "state_queued"}
+
+        # Command: /help
+        if text.startswith("/help"):
+            help_text = (
+                "🤖 **Blogger AI Bot Help**\n\n"
+                "Simply send a YouTube or Website URL to start a new blog post pipeline.\n\n"
+                "**Commands:**\n"
+                "• /cancel - Reset your session and unlock the bot\n"
+                "• /state - Check the detailed status of your current pipeline\n"
+                "• /help - Show this message"
+            )
+            await asyncio.to_thread(send_message, chat_id, help_text)
+            return {"status": "help_sent"}
+
         # Mutex Check
         lock_key = get_lock_key(chat_id)
         if redis_conn.exists(lock_key):

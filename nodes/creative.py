@@ -22,6 +22,7 @@ def creative_node(state: PipelineState):
     
     thread_id = state.get("thread_id", "")
     cache_key = f"cache_{thread_id}_creative"
+    refs = state.get("references", {}).get("raw", "")
     
     if not storylines_list:
         cached = redis_conn.get(cache_key)
@@ -30,7 +31,6 @@ def creative_node(state: PipelineState):
             storylines_raw = "\n---\n".join(storylines_list)
         else:
             # 1. Generate 3 Diverse Storylines
-            refs = state.get("references", {}).get("raw", "")
             research = "\n".join(state.get("research_snippets", []))
             
             storyline_prompt = (

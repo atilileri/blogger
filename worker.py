@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from utils.state import PipelineState
 from utils.telegram import answer_callback_query, edit_message_text, send_message
-from utils.redis_utils import release_lock, redis_conn
+from utils.redis_utils import release_lock, redis_conn, get_lock_key
 import functools
 import uuid
 
@@ -238,10 +238,21 @@ def resume_pipeline(callback_query: dict):
 
     # Edit the original message to reflect the choice and remove buttons
     original_text = callback_query["message"].get("text", "")
+    
+    # Format the decision for display
+    if decision.isdigit():
+        display_decision = f"Story {int(decision) + 1}"
+    elif decision == "approve":
+        display_decision = "Approved"
+    elif decision == "cancel":
+        display_decision = "Cancelled"
+    else:
+        display_decision = decision
+
     edit_message_text(
         chat_id=chat_id,
         message_id=message_id,
-        text=f"{original_text}\n\n✅ **Approved Selection**: {decision}"
+        text=f"{original_text}\n\n✅ **Decision**: {display_decision}"
     )
 
     with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
@@ -273,3 +284,59 @@ def resume_with_text(message: dict):
         # Send a dictionary payload that the node's interrupt handler will parse
         logger.debug(f"[WORKER] Invoking graph with revise text")
         app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
+
+def send_pipeline_state(chat_id: int):
+    """
+    RQ Job: Retrieves the current state of the pipeline and sends a summary to the user.
+    """
+    logger.info(f"[WORKER] send_pipeline_state: chat_id={chat_id}")
+    
+    # 1. Check Redis for lock and thread_id
+    lock_key = get_lock_key(chat_id)
+    is_locked = redis_conn.exists(lock_key)
+    thread_id_bytes = redis_conn.get(f"thread_{chat_id}")
+    
+    if not thread_id_bytes:
+        send_message(chat_id, "ℹ️ No active pipeline found for your chat ID.")
+        return
+
+    thread_id = thread_id_bytes.decode("utf-8")
+    
+    # 2. Query LangGraph for state
+    try:
+        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+            app = build_graph(checkpointer)
+            config = {"configurable": {"thread_id": thread_id}}
+            state = app.get_state(config)
+            
+            # state.values has the state
+            # state.next has the next nodes
+            values = state.values or {}
+            next_nodes = list(state.next) if state.next else []
+            
+            # Format info
+            summary = [f"🧵 **Pipeline State for {chat_id}**\n"]
+            summary.append(f"🆔 **Thread ID**: `{thread_id}`")
+            summary.append(f"🔒 **Locked**: {'✅ Yes' if is_locked else '🔓 No'}")
+            summary.append(f"📍 **Next Step**: {', '.join(next_nodes) or 'None (Completed/Waiting)'}")
+            
+            # Cache check
+            cache_creative = redis_conn.exists(f"cache_{thread_id}_creative")
+            summary.append(f"💾 **Creative Cache**: {'Cached' if cache_creative else 'Empty'}")
+            
+            # Pipeline progress
+            summary.append(f"\n📊 **Progress Summary**:")
+            summary.append(f"• Status: `{values.get('status', 'unknown')}`")
+            summary.append(f"• YouTube URLs: {len(values.get('youtube_urls', []))}")
+            summary.append(f"• Web URLs: {len(values.get('website_urls', []))}")
+            summary.append(f"• Transcripts: {len(values.get('transcripts', []))}")
+            summary.append(f"• Research Snippets: {len(values.get('research_snippets', []))}")
+            
+            if "chosen_storyline_index" in values:
+                summary.append(f"• Storyline Selected: {values['chosen_storyline_index'] + 1}")
+
+            send_message(chat_id, "\n".join(summary))
+            
+    except Exception as e:
+        logger.error(f"[WORKER] Failed to get state for {chat_id}: {e}")
+        send_message(chat_id, f"❌ Failed to retrieve pipeline state: {e}")
