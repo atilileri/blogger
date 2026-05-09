@@ -153,7 +153,8 @@ def handle_worker_errors(func):
                     
             if chat_id:
                 try:
-                    send_message(chat_id, "❌ A pipeline error occurred. Your session has been reset.")
+                    error_msg = f"❌ A pipeline error occurred:\n\n```\n{e}\n```\n\nYour session has been reset."
+                    send_message(chat_id, error_msg)
                     release_lock(chat_id)
                 except Exception as inner_e:
                     logger.error(f"[WORKER] Failed to handle error for {chat_id}: {inner_e}")
@@ -176,7 +177,8 @@ def handle_system_failure(job, connection, type, value, traceback):
         if chat_id:
             release_lock(chat_id)
             try:
-                send_message(chat_id, "⚠️ A system-level worker failure occurred. Your session has been reset.")
+                error_msg = f"⚠️ A system-level worker failure occurred:\n\n```\n{type} - {value}\n```\n\nYour session has been reset."
+                send_message(chat_id, error_msg)
             except Exception as e:
                 logger.error(f"[WORKER] Failed to notify {chat_id} during system failure: {e}")
 
@@ -207,14 +209,11 @@ def run_pipeline(message: dict):
         "generated_images": []
     }
 
-    try:
-        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
-            app = build_graph(checkpointer)
-            config = {"configurable": {"thread_id": thread_id}}
-            logger.debug("[WORKER] Invoking graph for run_pipeline")
-            app.invoke(initial_state, config=config)
-    except Exception as e:
-        logger.error(f"[WORKER] Error in run_pipeline: {e}")
+    with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+        app = build_graph(checkpointer)
+        config = {"configurable": {"thread_id": thread_id}}
+        logger.debug("[WORKER] Invoking graph for run_pipeline")
+        app.invoke(initial_state, config=config)
 
 @handle_worker_errors
 def resume_pipeline(callback_query: dict):
@@ -245,15 +244,12 @@ def resume_pipeline(callback_query: dict):
         text=f"{original_text}\n\n✅ **Approved Selection**: {decision}"
     )
 
-    try:
-        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
-            app = build_graph(checkpointer)
-            config = {"configurable": {"thread_id": thread_id}}
-            # Command(resume=...) sends the value back to the specific interrupt() call
-            logger.debug(f"[WORKER] Invoking graph with resume={decision}")
-            app.invoke(Command(resume=decision), config=config)
-    except Exception as e:
-        logger.error(f"[WORKER] Error in resume_pipeline: {e}")
+    with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+        app = build_graph(checkpointer)
+        config = {"configurable": {"thread_id": thread_id}}
+        # Command(resume=...) sends the value back to the specific interrupt() call
+        logger.debug(f"[WORKER] Invoking graph with resume={decision}")
+        app.invoke(Command(resume=decision), config=config)
 
 @handle_worker_errors
 def resume_with_text(message: dict):
@@ -271,12 +267,9 @@ def resume_with_text(message: dict):
 
     logger.info(f"[WORKER] resume_with_text: chat_id={chat_id} thread_id={thread_id}")
 
-    try:
-        with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
-            app = build_graph(checkpointer)
-            config = {"configurable": {"thread_id": thread_id}}
-            # Send a dictionary payload that the node's interrupt handler will parse
-            logger.debug(f"[WORKER] Invoking graph with revise text")
-            app.invoke(Command(resume={"action": "revise", "text": text}), config=config)
-    except Exception as e:
-        logger.error(f"[WORKER] Error in resume_with_text: {e}")
+    with SqliteSaver.from_conn_string(CHECKPOINT_DB) as checkpointer:
+        app = build_graph(checkpointer)
+        config = {"configurable": {"thread_id": thread_id}}
+        # Send a dictionary payload that the node's interrupt handler will parse
+        logger.debug(f"[WORKER] Invoking graph with revise text")
+        app.invoke(Command(resume={"action": "revise", "text": text}), config=config)

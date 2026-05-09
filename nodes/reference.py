@@ -65,20 +65,20 @@ def reference_node(state: PipelineState):
 
             # 2. Presentation & Interruption
             buttons = [
-            [
-                {"text": "✅ Approve", "callback_data": "approve"},
-                {"text": "📝 Revise", "callback_data": "revise"}
-            ],
-            [
-                {"text": "❌ Cancel", "callback_data": "cancel"}
+                [
+                    {"text": "✅ Approve", "callback_data": "approve"},
+                    {"text": "📝 Revise", "callback_data": "revise"}
+                ],
+                [
+                    {"text": "❌ Cancel", "callback_data": "cancel"}
+                ]
             ]
-        ]
-        
-        send_inline_keyboard(
-            chat_id,
-            f"🔍 **Step 1: References & Concepts**\n\n{refs_text}\n\nShould I proceed with these?",
-            buttons
-        )
+            
+            send_inline_keyboard(
+                chat_id,
+                f"🔍 **Step 1: References & Concepts**\n\n{refs_text}\n\nShould I proceed with these?",
+                buttons
+            )
 
     # 3. Wait for Human Decision
     # This will pause the graph. The worker will exit.
